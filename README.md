@@ -39,3 +39,6 @@ jobintel/
   docker-compose.yml
   Makefile
 ```
+
+## Status
+In progress. Initial scaffolding + local Postgres + first ETL slice coming next.
