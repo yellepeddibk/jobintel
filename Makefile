@@ -6,3 +6,5 @@ db-down:
 
 db-logs:
 	docker compose logs -f db
+init-db:
+	python scripts/init_db.py
