@@ -8,3 +8,6 @@ db-logs:
 	docker compose logs -f db
 init-db:
 	python scripts/init_db.py
+
+etl-sample:
+	python scripts/run_sample_etl.py
