@@ -4,3 +4,4 @@ sqlalchemy>=2.0
 pydantic-settings
 python-dotenv
 requests>=2.31
+streamlit>=1.30
