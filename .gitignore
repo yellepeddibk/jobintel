@@ -216,3 +216,6 @@ __pycache__/
 
 # Local DB
 *.db
+
+# Local SQLite DB
+jobintel.db
