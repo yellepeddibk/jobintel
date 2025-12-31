@@ -29,8 +29,12 @@ def main() -> None:
         session.commit()
 
         inserted_jobs = transform_jobs(session)
+        session.commit()
+
         inserted_skills = extract_skills_for_all_jobs(session)
-        rows = top_skills(session, limit=args.top)
+        session.commit()
+
+        rows = top_skills(session, limit=int(args.top))
 
     print(
         f"fetched={len(payloads)} inserted_raw={inserted_raw} "

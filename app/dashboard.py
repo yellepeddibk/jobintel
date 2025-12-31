@@ -29,13 +29,16 @@ st.set_page_config(page_title="JobIntel Dashboard", layout="wide")
 st.title("JobIntel Dashboard")
 st.caption("Live ingestion → normalize → extract skills → analytics")
 
-
 with st.sidebar:
     st.header("Controls")
-    top_n = st.slider("Top N skills", min_value=5, max_value=50, value=20, step=5)
-    latest_n = st.slider("Latest ingested jobs", min_value=5, max_value=50, value=20, step=5)
+    top_n = st.slider("Top N skills", min_value=1, max_value=50, value=20, step=1)
+    latest_n = st.slider("Latest ingested jobs", min_value=1, max_value=50, value=20, step=1)
     st.markdown("Populate data first:")
-    st.code('python scripts/run_live_etl.py --search "data engineer" --limit 50 --top 20', language="bash")
+    demo_cmd = (
+        'python scripts/run_live_etl.py --search "data engineer" '
+        "--limit 200 --top 25"
+    )
+    st.code(demo_cmd, language="bash")
 
 init_db()
 
@@ -45,10 +48,14 @@ with col1:
     st.subheader("Top Skills")
     with SessionLocal() as session:
         rows = top_skills(session, limit=int(top_n))
+
+    st.caption(f"Showing {len(rows)} row(s) (requested top_n={top_n})")
     df = pd.DataFrame(rows, columns=["skill", "count"])
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df, width="stretch", hide_index=True)
     if not df.empty:
         st.bar_chart(df.set_index("skill")["count"])
+    else:
+        st.info("No skills yet. Run the live ETL script to populate job_skills.")
 
 with col2:
     st.subheader("Latest Ingested Jobs")
@@ -58,6 +65,8 @@ with col2:
             .scalars()
             .all()
         )
+
+    st.caption(f"Showing {len(raw_rows)} row(s) (requested latest_n={latest_n})")
 
     items: list[dict[str, Any]] = []
     for r in raw_rows:
@@ -73,4 +82,4 @@ with col2:
             }
         )
 
-    st.dataframe(pd.DataFrame(items), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(items), width="stretch", hide_index=True)
