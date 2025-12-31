@@ -5,21 +5,26 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from jobintel.models import RawJob
+from jobintel.etl.raw import upsert_raw_job
 
 
-def load_raw_jobs(session: Session, path: str | Path) -> int:
-    p = Path(path)
-    n = 0
-    with p.open("r", encoding="utf-8") as f:
+def load_raw_jobs(session: Session, jsonl_path: str | Path) -> int:
+    """Load raw jobs from a JSONL file into raw_jobs.
+
+    Idempotent: reruns will skip jobs already seen (via content_hash, plus URL when present).
+    """
+    path = Path(jsonl_path)
+    inserted = 0
+
+    with path.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
             payload = json.loads(line)
-            source = payload.get("source", "unknown")
-            session.add(RawJob(source=source, payload_json=payload))
-            n += 1
+            payload.setdefault("source", "sample")
 
-    session.commit()
-    return n
+            if upsert_raw_job(session, payload):
+                inserted += 1
+
+    return inserted
