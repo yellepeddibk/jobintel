@@ -5,3 +5,4 @@ pydantic-settings
 python-dotenv
 requests>=2.31
 streamlit>=1.30
+psycopg[binary]>=3.1
