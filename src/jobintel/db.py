@@ -1,29 +1,36 @@
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from jobintel.core.config import settings
-from jobintel.models import Base
 
-_connect_args = {"check_same_thread": False} if settings.DATABASE_URL.startswith("sqlite") else {}
+
+def _connect_args(url: str) -> dict[str, Any]:
+    # SQLite needs this, Postgres must NOT receive it
+    if url.startswith("sqlite"):
+        return {"check_same_thread": False}
+    return {}
+
 
 engine = create_engine(
     settings.DATABASE_URL,
-    future=True,
-    echo=False,
-    connect_args=_connect_args,
+    connect_args=_connect_args(settings.DATABASE_URL),
+    pool_pre_ping=True,
 )
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+
+class Base(DeclarativeBase):
+    pass
 
 
 def init_db() -> None:
+    # Make sure all model classes are imported so they register with Base.metadata
+    import jobintel.models  # noqa: F401
+    from jobintel.models import Base
+
     Base.metadata.create_all(bind=engine)
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
