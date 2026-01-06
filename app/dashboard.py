@@ -1,3 +1,5 @@
+import re
+
 import pandas as pd
 import streamlit as st
 from sqlalchemy import or_, select
@@ -27,17 +29,28 @@ except Exception as e:
         "Postgres is running on port 5433."
     )
     st.exception(e)
-    st.info("Expected format: postgresql+psycopg://jobintel:jobintel_dev_password@127.0.0.1:5433/jobintel")
+    st.info(
+        "Expected format: postgresql+psycopg://jobintel:jobintel_dev_password@127.0.0.1:5433/jobintel"
+    )
     st.stop()
+
+
+def strip_html_tags(text: str) -> str:
+    """Remove HTML tags from text for better readability."""
+    if not text:
+        return ""
+    # Remove HTML tags
+    clean = re.sub(r"<[^>]+>", "", text)
+    # Replace multiple whitespace with single space
+    clean = re.sub(r"\s+", " ", clean)
+    return clean.strip()
 
 
 @st.cache_data(ttl=30)
 def get_sources() -> list[str]:
     try:
         with SessionLocal() as s:
-            rows = s.execute(
-                select(RawJob.source).distinct().order_by(RawJob.source)
-            ).all()
+            rows = s.execute(select(RawJob.source).distinct().order_by(RawJob.source)).all()
         return [r[0] for r in rows if r[0]]
     except Exception as e:
         st.error(f"Failed to fetch sources: {e}")
@@ -68,9 +81,7 @@ def get_latest_jobs(
         with SessionLocal() as s:
             url_expr = RawJob.payload_json["url"].as_string()
 
-            q = s.query(Job, RawJob.source.label("source")).outerjoin(
-                RawJob, url_expr == Job.url
-            )
+            q = s.query(Job, RawJob.source.label("source")).outerjoin(RawJob, url_expr == Job.url)
 
             if keyword:
                 like = f"%{keyword}%"
@@ -106,8 +117,12 @@ def get_latest_jobs(
 
             data = []
             for job, source in rows:
+                # Get full description and strip HTML
+                full_desc = strip_html_tags(job.description or "")
+
                 data.append(
                     {
+                        "id": job.id,
                         "title": job.title,
                         "company": job.company,
                         "location": job.location,
@@ -115,7 +130,7 @@ def get_latest_jobs(
                         "source": source,
                         "skills": ", ".join(sorted(set(skill_map.get(job.id, [])))),
                         "url": job.url,
-                        "description": (job.description or "")[:400].strip(),
+                        "description_full": full_desc,
                     }
                 )
 
@@ -201,8 +216,10 @@ with col2:
     )
 
     if not jobs_df.empty:
+        # Display table without description_full and id
+        display_df = jobs_df.drop(columns=["id", "description_full"], errors="ignore")
         st.dataframe(
-            jobs_df.drop(columns=["description"], errors="ignore"),
+            display_df,
             use_container_width=True,
             hide_index=True,
             column_config={
@@ -211,8 +228,7 @@ with col2:
         )
 
         st.caption(
-            "Tip: use the clickable 'open' link. The raw URL may look "
-            "truncated but the link works."
+            "Tip: use the clickable 'open' link. The raw URL may look truncated but the link works."
         )
     else:
         st.info("No jobs found. Try adjusting filters or ingesting more data.")
@@ -229,6 +245,7 @@ else:
         company = row.get("company") or ""
         source = row.get("source") or ""
         url = row.get("url") or ""
+        job_id = int(row["id"])
 
         label = f"{title}"
         if company:
@@ -247,6 +264,28 @@ else:
                 "source": row.get("source"),
             }
             st.json(meta)
-            desc = row.get("description") or ""
-            if desc:
-                st.write(desc)
+
+            # Show full description with Show More/Less toggle
+            description_full = row.get("description_full") or ""
+            if description_full:
+                # Use stable job ID for session state keys
+                show_key = f"show_full_{job_id}"
+                more_key = f"more_{job_id}"
+                less_key = f"less_{job_id}"
+
+                if show_key not in st.session_state:
+                    st.session_state[show_key] = False
+
+                # Show preview or full based on state
+                preview_length = 500
+                if len(description_full) > preview_length:
+                    if st.session_state[show_key]:
+                        st.write(description_full)
+                        if st.button("Show Less", key=less_key):
+                            st.session_state[show_key] = False
+                    else:
+                        st.write(description_full[:preview_length] + "...")
+                        if st.button("Show More", key=more_key):
+                            st.session_state[show_key] = True
+                else:
+                    st.write(description_full)
