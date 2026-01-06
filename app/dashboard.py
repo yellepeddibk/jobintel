@@ -2,15 +2,13 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy import or_, select
 
-from jobintel.db import SessionLocal, init_db
-from jobintel.models import Job, JobSkill, RawJob
 from jobintel.analytics.top_skills import top_skills
-
-from jobintel.etl.sources.remotive import fetch_remotive_jobs
+from jobintel.db import SessionLocal, init_db
 from jobintel.etl.raw import upsert_raw_job
-from jobintel.etl.transform import transform_jobs
 from jobintel.etl.skills import extract_skills_for_all_jobs
-
+from jobintel.etl.sources.remotive import fetch_remotive_jobs
+from jobintel.etl.transform import transform_jobs
+from jobintel.models import Job, JobSkill, RawJob
 
 st.set_page_config(page_title="JobIntel Dashboard", layout="wide")
 st.title("JobIntel Dashboard")
@@ -24,7 +22,10 @@ try:
         test_session.execute(select(1))
     st.success("✓ Database connected")
 except Exception as e:
-    st.error("❌ Database connection failed. Check DATABASE_URL and ensure Postgres is running on port 5433.")
+    st.error(
+        "❌ Database connection failed. Check DATABASE_URL and ensure "
+        "Postgres is running on port 5433."
+    )
     st.exception(e)
     st.info("Expected format: postgresql+psycopg://jobintel:jobintel_dev_password@127.0.0.1:5433/jobintel")
     st.stop()
@@ -139,7 +140,9 @@ with st.sidebar:
                     with SessionLocal() as session:
                         if ingest_source == "remotive":
                             # Use keyword args to match fetch_remotive_jobs signature
-                            payloads = fetch_remotive_jobs(search=ingest_query, limit=int(ingest_limit))
+                            payloads = fetch_remotive_jobs(
+                                search=ingest_query, limit=int(ingest_limit)
+                            )
                         else:
                             payloads = []
 
@@ -207,7 +210,10 @@ with col2:
             },
         )
 
-        st.caption("Tip: use the clickable 'open' link. The raw URL may look truncated but the link works.")
+        st.caption(
+            "Tip: use the clickable 'open' link. The raw URL may look "
+            "truncated but the link works."
+        )
     else:
         st.info("No jobs found. Try adjusting filters or ingesting more data.")
 
