@@ -37,9 +37,7 @@ def upsert_raw_job(session: Session, payload: dict[str, Any]) -> bool:
     url = payload.get("url")
     content_hash = payload.get("content_hash")
 
-    stmt = select(RawJob.id).where(
-        RawJob.payload_json["content_hash"].as_string() == content_hash
-    )
+    stmt = select(RawJob.id).where(RawJob.payload_json["content_hash"].as_string() == content_hash)
     if url:
         stmt = stmt.where(RawJob.payload_json["url"].as_string() == url)
 
