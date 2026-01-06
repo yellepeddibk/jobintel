@@ -1,60 +1,60 @@
 # JobIntel
 
-JobIntel is a job market intelligence pipeline that ingests job postings, cleans + deduplicates them, extracts skills, stores results in Postgres, exposes insights via FastAPI, and visualizes trends in a Streamlit dashboard.
+Job market intelligence pipeline that ingests job postings, normalizes them, extracts skills, stores in Postgres, and visualizes in a Streamlit dashboard.
 
 ## Status
-In progress. Initial scaffolding + local Postgres + first ETL vertical slice coming next.
+✅ **Working** - Dashboard renders with error handling, Remotive ingestion, and filtering.
 
-## Features (MVP)
-- Ingest raw job postings into `raw_jobs`
-- Clean/normalize/dedupe into `jobs`
-- Skill extraction into `job_skills` (dictionary matching in v1)
-- FastAPI endpoints:
-  - `GET /jobs?skill=python&location=...&limit=50&offset=0`
-  - `GET /skills/top?days=30&limit=50`
-  - `GET /skills/trend?skill=python&days=90`
-- Streamlit dashboard:
-  - Top skills chart
-  - Filters (role/location/date)
-  - Jobs table
+## Features
+- ✅ Remotive API integration
+- ✅ ETL pipeline: raw jobs → normalized → skill extraction
+- ✅ Hash-based deduplication
+- ✅ Dictionary-based skill extraction
+- ✅ Streamlit dashboard with filters (keyword, source, skills)
+- ✅ DB connection validation with clear error messages
+- ✅ Clickable job links
 
-## Tech stack
-Python, Postgres, FastAPI, Streamlit, Docker Compose, GitHub Actions
+## Tech Stack
+Python, Postgres, SQLAlchemy, Docker Compose, Streamlit
 
 ## Architecture
-ETL (Python) -> Postgres -> FastAPI -> Streamlit
+ETL (Python) → Postgres → Streamlit
 
-## Data model (draft)
-- `raw_jobs(id, source, payload_json, ingested_at)`
-- `jobs(id, title, company, location, url, posted_at, description, hash)`
-- `job_skills(job_id, skill)`
+## Data Model
+- `raw_jobs` - Raw job payloads from sources
+- `jobs` - Normalized jobs (title, company, location, url, etc.)
+- `job_skills` - Extracted skills linked to jobs
 
-## Quickstart (coming soon)
+## Quickstart
 ```bash
-docker compose up -d
-make etl
-make api
-make dashboard
+# 1. Start Postgres
+docker-compose up -d
+
+# 2. Start dashboard
+streamlit run app/dashboard.py
+
+# 3. Open browser at http://localhost:8501
+# 4. Click "Run ingest" to fetch jobs
+# 5. Use filters to explore!
 ```
 
-## Local setup (coming next)
-This repo will be runnable locally with Docker Compose:
-- API docs at `http://localhost:8000/docs`
-- Dashboard at `http://localhost:8501`
+## Setup
+1. **Prerequisites**: Docker, Python 3.11+
+2. **Install**: `pip install -r requirements.txt`
+3. **Database**: `docker-compose up -d`
+4. **Dashboard**: `streamlit run app/dashboard.py`
 
-## Repo structure (planned)
-```text
+## Repo Structure
+```
 jobintel/
-  src/jobintel/       # core package (etl + api + shared code)
-    etl/              # extract/transform/load
-    api/              # FastAPI app
-  dashboard/          # Streamlit app
-  db/                 # schema + migrations (optional)
-  tests/              # unit/integration tests
-  data/               # raw/processed (gitignored)
-  scripts/            # helper scripts
-  docs/               # screenshots, notes
-  docker-compose.yml
-  Makefile
-  pyproject.toml
+  src/jobintel/          # Core package
+    etl/                 # Extract/transform/load
+    analytics/           # Analytics queries
+    models.py            # SQLAlchemy models
+    db.py                # Database setup
+  app/
+    dashboard.py         # Streamlit UI
+  db/
+    schema.sql           # Database schema
+  docker-compose.yml     # Postgres container
 ```
