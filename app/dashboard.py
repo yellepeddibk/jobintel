@@ -201,7 +201,7 @@ with col1:
         with SessionLocal() as s:
             skills = top_skills(s, top_n)
         skills_df = pd.DataFrame(skills, columns=["skill", "count"])
-        st.dataframe(skills_df, use_container_width=True, hide_index=True)
+        st.dataframe(skills_df, width="stretch", hide_index=True)
     except Exception as e:
         st.error("Failed to load top skills:")
         st.exception(e)
@@ -220,7 +220,7 @@ with col2:
         display_df = jobs_df.drop(columns=["id", "description_full"], errors="ignore")
         st.dataframe(
             display_df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "url": st.column_config.LinkColumn("url", display_text="open"),
