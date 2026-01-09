@@ -4,10 +4,8 @@ import argparse
 
 from jobintel.analytics.top_skills import top_skills
 from jobintel.db import SessionLocal, init_db
-from jobintel.etl.raw import upsert_raw_job
-from jobintel.etl.skills import extract_skills_for_all_jobs
+from jobintel.etl.pipeline import run_etl_from_payloads
 from jobintel.etl.sources.remotive import fetch_remotive_jobs
-from jobintel.etl.transform import transform_jobs
 
 
 def main() -> None:
@@ -19,26 +17,19 @@ def main() -> None:
     args = ap.parse_args()
 
     init_db()
+
+    # Fetch from Remotive (supports category arg not in registry interface)
     payloads = fetch_remotive_jobs(search=args.search, category=args.category, limit=args.limit)
 
     with SessionLocal() as session:
-        inserted_raw = 0
-        for payload in payloads:
-            if upsert_raw_job(session, payload):
-                inserted_raw += 1
-        session.commit()
-
-        inserted_jobs = transform_jobs(session)
-        session.commit()
-
-        inserted_skills = extract_skills_for_all_jobs(session)
-        session.commit()
+        # Run ETL pipeline on fetched payloads
+        result = run_etl_from_payloads(session, payloads)
 
         rows = top_skills(session, limit=int(args.top))
 
     print(
-        f"fetched={len(payloads)} inserted_raw={inserted_raw} "
-        f"inserted_jobs={inserted_jobs} inserted_skills={inserted_skills}"
+        f"fetched={len(payloads)} inserted_raw={result.inserted_raw} "
+        f"inserted_jobs={result.inserted_jobs} inserted_skills={result.inserted_skills}"
     )
     print("skill\tcount")
     for skill, n in rows:
