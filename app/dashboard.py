@@ -8,7 +8,7 @@ from jobintel.analytics.top_skills import top_skills
 from jobintel.db import SessionLocal, init_db
 from jobintel.etl.raw import upsert_raw_job
 from jobintel.etl.skills import extract_skills_for_all_jobs
-from jobintel.etl.sources.remotive import fetch_remotive_jobs
+from jobintel.etl.sources.registry import fetch_from_source, list_sources
 from jobintel.etl.transform import transform_jobs
 from jobintel.models import Job, JobSkill, RawJob
 
@@ -147,19 +147,32 @@ with st.sidebar:
     with st.expander("Ingest jobs (no scripts needed)", expanded=True):
         ingest_query = st.text_input("Search", value="engineer")
         ingest_limit = st.number_input("Limit", min_value=1, max_value=500, value=50, step=10)
-        ingest_source = st.selectbox("Source", options=["remotive"], index=0)
 
-        if st.button("Run ingest", type="primary"):
+        # Get available sources from registry
+        try:
+            available_sources = list_sources()
+        except Exception as e:
+            st.error(f"Failed to load sources: {e}")
+            available_sources = []
+
+        if not available_sources:
+            st.warning("No sources available. Check source registration.")
+            ingest_source = None
+        else:
+            ingest_source = st.selectbox("Source", options=available_sources, index=0)
+
+        if ingest_source and st.button("Run ingest", type="primary"):
             try:
                 with st.spinner("Fetching and loading jobs..."):
                     with SessionLocal() as session:
-                        if ingest_source == "remotive":
-                            # Use keyword args to match fetch_remotive_jobs signature
-                            payloads = fetch_remotive_jobs(
-                                search=ingest_query, limit=int(ingest_limit)
-                            )
-                        else:
-                            payloads = []
+                        # Fetch from selected source using registry
+                        payloads, warnings = fetch_from_source(
+                            ingest_source, ingest_query, int(ingest_limit)
+                        )
+
+                        # Show warnings if any payloads were invalid
+                        for warning in warnings:
+                            st.warning(warning)
 
                         inserted_raw = 0
                         for payload in payloads:
