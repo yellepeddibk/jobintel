@@ -6,6 +6,8 @@ from typing import Any
 
 import requests
 
+from jobintel.etl.sources.registry import register_source
+
 REMOTIVE_ENDPOINT = "https://remotive.com/api/remote-jobs"
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -55,3 +57,18 @@ def fetch_remotive_jobs(
             }
         )
     return payloads
+
+
+# Source wrapper for registry
+class RemotiveSource:
+    """Remotive job source."""
+
+    name = "remotive"
+
+    def fetch(self, search: str, limit: int) -> list[dict[str, Any]]:
+        """Fetch jobs from Remotive."""
+        return fetch_remotive_jobs(search=search, limit=limit)
+
+
+# Auto-register on import
+register_source(RemotiveSource())
