@@ -13,10 +13,8 @@ from jobintel.analytics.queries import (
 )
 from jobintel.analytics.top_skills import top_skills
 from jobintel.db import SessionLocal, init_db
-from jobintel.etl.raw import upsert_raw_job
-from jobintel.etl.skills import extract_skills_for_all_jobs
-from jobintel.etl.sources.registry import fetch_from_source, list_sources
-from jobintel.etl.transform import transform_jobs
+from jobintel.etl.pipeline import run_ingest
+from jobintel.etl.sources.registry import list_sources
 from jobintel.models import Job, JobSkill, RawJob
 
 st.set_page_config(page_title="JobIntel Dashboard", layout="wide")
@@ -172,26 +170,16 @@ with st.sidebar:
             try:
                 with st.spinner("Fetching and loading jobs..."):
                     with SessionLocal() as session:
-                        # Fetch from selected source using registry
-                        payloads, warnings = fetch_from_source(
-                            ingest_source, ingest_query, int(ingest_limit)
-                        )
+                        result = run_ingest(session, ingest_source, ingest_query, int(ingest_limit))
 
                         # Show warnings if any payloads were invalid
-                        for warning in warnings:
+                        for warning in result.warnings:
                             st.warning(warning)
 
-                        inserted_raw = 0
-                        for payload in payloads:
-                            if upsert_raw_job(session, payload):
-                                inserted_raw += 1
-
-                        inserted_jobs = transform_jobs(session)
-                        inserted_skills = extract_skills_for_all_jobs(session)
-
                     st.success(
-                        f"✅ fetched={len(payloads)} inserted_raw={inserted_raw} "
-                        f"inserted_jobs={inserted_jobs} inserted_skills={inserted_skills}"
+                        f"Fetched={result.fetched} inserted_raw={result.inserted_raw} "
+                        f"inserted_jobs={result.inserted_jobs} "
+                        f"inserted_skills={result.inserted_skills}"
                     )
 
                 # Refresh cached queries after ingest
