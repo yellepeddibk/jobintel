@@ -27,6 +27,7 @@ def _init_sources() -> None:
         return
 
     # Direct module imports to avoid circular dependency through __init__.py
+    from jobintel.etl.sources.arbeitnow import ArbeitnowSource  # noqa: F401
     from jobintel.etl.sources.remoteok import RemoteOKSource  # noqa: F401
     from jobintel.etl.sources.remotive import RemotiveSource  # noqa: F401
 
