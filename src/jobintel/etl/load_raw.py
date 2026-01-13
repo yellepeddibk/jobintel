@@ -5,14 +5,25 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from jobintel.core.config import settings
 from jobintel.etl.raw import upsert_raw_job
 
 
-def load_raw_jobs(session: Session, jsonl_path: str | Path) -> int:
+def load_raw_jobs(
+    session: Session,
+    jsonl_path: str | Path,
+    environment: str | None = None,
+) -> int:
     """Load raw jobs from a JSONL file into raw_jobs.
+
+    Args:
+        session: SQLAlchemy session
+        jsonl_path: Path to JSONL file with job payloads
+        environment: Environment tag (uses settings.ENV if None)
 
     Idempotent: reruns will skip jobs already seen (via content_hash, plus URL when present).
     """
+    env = environment or settings.ENV
     path = Path(jsonl_path)
     inserted = 0
 
@@ -24,7 +35,7 @@ def load_raw_jobs(session: Session, jsonl_path: str | Path) -> int:
             payload = json.loads(line)
             payload.setdefault("source", "sample")
 
-            if upsert_raw_job(session, payload):
+            if upsert_raw_job(session, payload, environment=env):
                 inserted += 1
 
     return inserted

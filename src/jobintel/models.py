@@ -21,6 +21,10 @@ class RawJob(Base):
         DateTime(timezone=True),
         server_default=func.now(),
     )
+    # Environment isolation: development | test | production
+    environment: Mapped[str] = mapped_column(
+        String, nullable=False, default="production", index=True
+    )
 
 
 class Job(Base):
@@ -69,6 +73,10 @@ class IngestRun(Base):
     source: Mapped[str] = mapped_column(String, nullable=False, index=True)
     search: Mapped[str | None] = mapped_column(String, nullable=True)
     limit: Mapped[int | None] = mapped_column(nullable=True)
+    # Environment isolation: development | test | production
+    environment: Mapped[str] = mapped_column(
+        String, nullable=False, default="production", index=True
+    )
 
     status: Mapped[str] = mapped_column(String, nullable=False)  # running|success|failed
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

@@ -6,6 +6,7 @@ import streamlit as st
 from sqlalchemy import func, or_, select
 
 from jobintel.analytics.queries import (
+    PRODUCTION_ENV,
     get_kpis,
     get_skill_trends,
     get_top_skills,
@@ -53,9 +54,15 @@ def strip_html_tags(text: str) -> str:
 
 @st.cache_data(ttl=30)
 def get_sources() -> list[str]:
+    """Get list of sources from production environment only."""
     try:
         with SessionLocal() as s:
-            rows = s.execute(select(RawJob.source).distinct().order_by(RawJob.source)).all()
+            rows = s.execute(
+                select(RawJob.source)
+                .where(RawJob.environment == PRODUCTION_ENV)
+                .distinct()
+                .order_by(RawJob.source)
+            ).all()
         return [r[0] for r in rows if r[0]]
     except Exception as e:
         st.error(f"Failed to fetch sources: {e}")
@@ -64,10 +71,19 @@ def get_sources() -> list[str]:
 
 @st.cache_data(ttl=30)
 def get_skill_choices(limit: int = 200) -> list[str]:
+    """Get list of skills from production environment only."""
     try:
         with SessionLocal() as s:
+            url_expr = RawJob.payload_json["url"].as_string()
+            # Only include skills from jobs in production environment
             rows = s.execute(
-                select(JobSkill.skill).distinct().order_by(JobSkill.skill).limit(limit)
+                select(JobSkill.skill)
+                .join(Job, Job.id == JobSkill.job_id)
+                .join(RawJob, url_expr == Job.url)
+                .where(RawJob.environment == PRODUCTION_ENV)
+                .distinct()
+                .order_by(JobSkill.skill)
+                .limit(limit)
             ).all()
         return [r[0] for r in rows if r[0]]
     except Exception as e:
@@ -84,11 +100,16 @@ def get_latest_jobs(
     days_back: int | None = None,
     location_filter: str | None = None,
 ) -> pd.DataFrame:
+    """Get latest jobs from production environment only."""
     try:
         with SessionLocal() as s:
             url_expr = RawJob.payload_json["url"].as_string()
 
-            q = s.query(Job, RawJob.source.label("source")).outerjoin(RawJob, url_expr == Job.url)
+            # Inner join RawJob - required for environment/source filtering
+            q = s.query(Job, RawJob.source.label("source")).join(RawJob, url_expr == Job.url)
+
+            # Filter by production environment only
+            q = q.filter(RawJob.environment == PRODUCTION_ENV)
 
             # Filter by date (posted_at or ingested_at as fallback)
             if days_back:
@@ -535,14 +556,23 @@ with tab_jobs:
 # ==================== INGEST RUNS TAB ====================
 with tab_runs:
     st.subheader("Recent Ingest Runs")
-    st.caption("Track ingest operations for observability and debugging.")
+    st.caption(
+        "Track ingest operations for observability and debugging. "
+        "Shows production environment runs only."
+    )
 
     if st.button("🔄 Refresh", key="refresh_runs"):
         st.rerun()
 
     try:
         with SessionLocal() as s:
-            runs = s.query(IngestRun).order_by(IngestRun.started_at.desc()).limit(20).all()
+            runs = (
+                s.query(IngestRun)
+                .filter(IngestRun.environment == PRODUCTION_ENV)
+                .order_by(IngestRun.started_at.desc())
+                .limit(20)
+                .all()
+            )
 
         if runs:
             runs_data = []

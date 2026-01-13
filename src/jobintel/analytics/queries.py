@@ -1,6 +1,7 @@
 """Analytics queries for the JobIntel dashboard.
 
 All functions return plain Python structures for easy testing and caching.
+Queries filter by production environment by default to exclude test/sample data.
 """
 
 from __future__ import annotations
@@ -12,6 +13,9 @@ from sqlalchemy.orm import Session
 
 from jobintel.models import IngestRun, Job, JobSkill, RawJob
 
+# Default environment filter for dashboard queries
+PRODUCTION_ENV = "production"
+
 
 def _base_job_query(
     session: Session,
@@ -19,14 +23,19 @@ def _base_job_query(
     date_from: date | None = None,
     date_to: date | None = None,
     search: str | None = None,
+    environment: str = PRODUCTION_ENV,
 ):
     """Build base query for jobs with optional filters.
 
-    Returns a query that selects Job with optional RawJob join for source filtering.
+    Returns a query that selects Job with RawJob join for source/environment filtering.
+    Only includes jobs from the specified environment (production by default).
     """
-    # We need to join RawJob to get source info
+    # Inner join RawJob - required for environment/source filtering
     url_expr = RawJob.payload_json["url"].as_string()
-    q = session.query(Job).outerjoin(RawJob, url_expr == Job.url)
+    q = session.query(Job).join(RawJob, url_expr == Job.url)
+
+    # Environment filter - only show jobs from specified environment
+    q = q.filter(RawJob.environment == environment)
 
     if source:
         q = q.filter(RawJob.source == source)
@@ -50,6 +59,7 @@ def get_kpis(
     date_from: date | None = None,
     date_to: date | None = None,
     search: str | None = None,
+    environment: str = PRODUCTION_ENV,
 ) -> dict:
     """Get key performance indicators for the dashboard.
 
@@ -57,16 +67,16 @@ def get_kpis(
         dict with keys: total_jobs, jobs_last_7d, unique_companies, sources_count
     """
     # Total jobs with filters
-    base_q = _base_job_query(session, source, date_from, date_to, search)
+    base_q = _base_job_query(session, source, date_from, date_to, search, environment)
     total_jobs = base_q.count()
 
     # Jobs in last 7 days (ignoring other date filters for this metric)
     seven_days_ago = date.today() - timedelta(days=7)
-    jobs_7d_q = _base_job_query(session, source, seven_days_ago, None, search)
+    jobs_7d_q = _base_job_query(session, source, seven_days_ago, None, search, environment)
     jobs_last_7d = jobs_7d_q.count()
 
     # Unique companies
-    companies_q = _base_job_query(session, source, date_from, date_to, search)
+    companies_q = _base_job_query(session, source, date_from, date_to, search, environment)
     unique_companies = (
         companies_q.with_entities(func.count(distinct(Job.company)))
         .filter(Job.company.isnot(None))
@@ -74,10 +84,13 @@ def get_kpis(
         or 0
     )
 
-    # Number of sources (from successful ingest runs)
+    # Number of sources (from successful ingest runs in this environment)
     sources_count = (
         session.execute(
-            select(func.count(distinct(IngestRun.source))).where(IngestRun.status == "success")
+            select(func.count(distinct(IngestRun.source))).where(
+                IngestRun.status == "success",
+                IngestRun.environment == environment,
+            )
         ).scalar()
         or 0
     )
@@ -97,6 +110,7 @@ def get_top_skills(
     date_to: date | None = None,
     search: str | None = None,
     limit: int = 20,
+    environment: str = PRODUCTION_ENV,
 ) -> list[tuple[str, int]]:
     """Get top skills by number of distinct jobs mentioning them.
 
@@ -107,8 +121,11 @@ def get_top_skills(
     q = (
         session.query(JobSkill.skill, func.count(distinct(JobSkill.job_id)).label("n"))
         .join(Job, Job.id == JobSkill.job_id)
-        .outerjoin(RawJob, url_expr == Job.url)
+        .join(RawJob, url_expr == Job.url)  # Inner join for environment filtering
     )
+
+    # Environment filter
+    q = q.filter(RawJob.environment == environment)
 
     if source:
         q = q.filter(RawJob.source == source)
@@ -138,6 +155,7 @@ def get_skill_trends(
     source: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    environment: str = PRODUCTION_ENV,
 ) -> list[dict]:
     """Get skill counts over time, bucketed by week.
 
@@ -154,9 +172,12 @@ def get_skill_trends(
     q = (
         session.query(Job.posted_at, RawJob.ingested_at, JobSkill.skill)
         .join(JobSkill, JobSkill.job_id == Job.id)
-        .outerjoin(RawJob, url_expr == Job.url)
+        .join(RawJob, url_expr == Job.url)  # Inner join for environment filtering
         .filter(JobSkill.skill.in_(skills))
     )
+
+    # Environment filter
+    q = q.filter(RawJob.environment == environment)
 
     if source:
         q = q.filter(RawJob.source == source)
@@ -200,15 +221,20 @@ def get_top_skills_by_source(
     date_to: date | None = None,
     search: str | None = None,
     limit: int = 10,
+    environment: str = PRODUCTION_ENV,
 ) -> dict[str, list[tuple[str, int]]]:
     """Get top skills for each source.
 
     Returns dict: {"remotive": [(skill, count), ...], "remoteok": [...]}
     """
-    # Get all sources first
+    # Get all sources from the specified environment
     sources = [
         row[0]
-        for row in session.execute(select(distinct(RawJob.source)).order_by(RawJob.source)).all()
+        for row in session.execute(
+            select(distinct(RawJob.source))
+            .where(RawJob.environment == environment)
+            .order_by(RawJob.source)
+        ).all()
     ]
 
     result = {}
@@ -220,6 +246,7 @@ def get_top_skills_by_source(
             date_to=date_to,
             search=search,
             limit=limit,
+            environment=environment,
         )
 
     return result

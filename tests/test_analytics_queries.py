@@ -5,6 +5,7 @@ from datetime import date
 from sqlalchemy import text
 
 from jobintel.analytics.queries import (
+    PRODUCTION_ENV,
     get_kpis,
     get_skill_trends,
     get_top_skills,
@@ -17,13 +18,14 @@ from jobintel.etl.transform import transform_jobs
 
 
 def _setup_test_data(session):
-    """Clear tables and load sample data."""
+    """Clear tables and load sample data as production for testing queries."""
     session.execute(text("DELETE FROM job_skills"))
     session.execute(text("DELETE FROM jobs"))
     session.execute(text("DELETE FROM raw_jobs"))
     session.commit()
 
-    load_raw_jobs(session, "data/sample_jobs.jsonl")
+    # Load test data with production environment so queries can find it
+    load_raw_jobs(session, "data/sample_jobs.jsonl", environment=PRODUCTION_ENV)
     transform_jobs(session)
     extract_skills_for_all_jobs(session)
 

@@ -29,6 +29,13 @@ class Base(DeclarativeBase):
 
 
 def init_db() -> None:
+    """Initialize database schema.
+
+    For development/testing: Uses SQLAlchemy create_all() for quick setup.
+    For production: Should use Alembic migrations (alembic upgrade head).
+
+    This function is safe to call multiple times; create_all() is idempotent.
+    """
     # Make sure all model classes are imported so they register with Base.metadata
     import jobintel.models  # noqa: F401
     from jobintel.models import Base
