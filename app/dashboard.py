@@ -3,7 +3,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 import streamlit as st
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 
 from jobintel.analytics.queries import (
     get_kpis,
@@ -81,12 +81,57 @@ def get_latest_jobs(
     keyword: str | None,
     sources: list[str],
     skills: list[str],
+    days_back: int | None = None,
+    location_filter: str | None = None,
 ) -> pd.DataFrame:
     try:
         with SessionLocal() as s:
             url_expr = RawJob.payload_json["url"].as_string()
 
             q = s.query(Job, RawJob.source.label("source")).outerjoin(RawJob, url_expr == Job.url)
+
+            # Filter by date (posted_at or ingested_at as fallback)
+            if days_back:
+                cutoff_date = date.today() - timedelta(days=days_back)
+                date_expr = func.coalesce(Job.posted_at, RawJob.ingested_at)
+                q = q.filter(date_expr >= cutoff_date)
+
+            # Filter by location with smart US detection
+            if location_filter:
+                filter_lower = location_filter.strip().lower()
+
+                # Smart US detection
+                if filter_lower in ["us", "usa", "united states"]:
+                    # Match common US location patterns
+                    us_patterns = [
+                        Job.location.ilike("%United States%"),
+                        Job.location.ilike("%USA%"),
+                        Job.location.ilike("%US%"),
+                        Job.location.ilike("%, __"),  # State abbreviations: ", CA", ", NY", ", WA"
+                        # Major US cities (tech hubs + common job markets)
+                        Job.location.ilike("%New York%"),
+                        Job.location.ilike("%Los Angeles%"),
+                        Job.location.ilike("%San Francisco%"),
+                        Job.location.ilike("%Bay Area%"),
+                        Job.location.ilike("%Chicago%"),
+                        Job.location.ilike("%Boston%"),
+                        Job.location.ilike("%Seattle%"),
+                        Job.location.ilike("%Austin%"),
+                        Job.location.ilike("%Denver%"),
+                        Job.location.ilike("%Portland%"),
+                        Job.location.ilike("%Miami%"),
+                        Job.location.ilike("%Atlanta%"),
+                        Job.location.ilike("%Dallas%"),
+                        Job.location.ilike("%Houston%"),
+                        Job.location.ilike("%Phoenix%"),
+                        Job.location.ilike("%Philadelphia%"),
+                        Job.location.ilike("%San Diego%"),
+                        Job.location.ilike("%Washington%"),
+                    ]
+                    q = q.filter(or_(*us_patterns))
+                else:
+                    # Regular substring match for other locations
+                    q = q.filter(Job.location.ilike(f"%{location_filter}%"))
 
             if keyword:
                 like = f"%{keyword}%"
@@ -204,6 +249,16 @@ with st.sidebar:
 
     skills_all = get_skill_choices()
     skills_sel = st.multiselect("Skill filter", options=skills_all, default=[], key="jobs_skills")
+
+    st.divider()
+    st.subheader("Date & Location")
+    days_back = st.slider("Posted within last N days", 7, 180, 90, key="jobs_days_back")
+    location_filter = st.text_input(
+        "Location contains",
+        value="",
+        key="jobs_location",
+        help="Examples: 'US' (all USA jobs), 'CA' (California), 'Remote', 'New York'",
+    )
 
 
 # --- Main Content with Tabs ---
@@ -376,7 +431,7 @@ with tab_analytics:
 
 # ==================== JOBS TAB ====================
 with tab_jobs:
-    col1, col2 = st.columns([1, 1], gap="large")
+    col1, col2 = st.columns([1, 2], gap="large")
 
     with col1:
         st.subheader("Top Skills")
@@ -396,6 +451,8 @@ with tab_jobs:
             keyword=keyword.strip() or None,
             sources=sources_sel,
             skills=skills_sel,
+            days_back=days_back,
+            location_filter=location_filter.strip() or None,
         )
 
         if not jobs_df.empty:
@@ -407,6 +464,7 @@ with tab_jobs:
                 hide_index=True,
                 column_config={
                     "url": st.column_config.LinkColumn("url", display_text="open"),
+                    "posted_at": st.column_config.DateColumn("Posted", format="YYYY-MM-DD"),
                 },
             )
 
@@ -415,7 +473,7 @@ with tab_jobs:
                 "The raw URL may look truncated but the link works."
             )
         else:
-            st.info("No jobs found. Try adjusting filters or ingesting more data.")
+            st.info("No jobs found. Click 'Run ingest' in the sidebar to fetch jobs.")
 
     st.divider()
     st.subheader("Job Details")
@@ -479,6 +537,9 @@ with tab_runs:
     st.subheader("Recent Ingest Runs")
     st.caption("Track ingest operations for observability and debugging.")
 
+    if st.button("🔄 Refresh", key="refresh_runs"):
+        st.rerun()
+
     try:
         with SessionLocal() as s:
             runs = s.query(IngestRun).order_by(IngestRun.started_at.desc()).limit(20).all()
@@ -519,7 +580,7 @@ with tab_runs:
                 )
 
             runs_df = pd.DataFrame(runs_data)
-            st.dataframe(runs_df, hide_index=True, use_container_width=True)
+            st.dataframe(runs_df, hide_index=True, width="stretch")
 
             # Show details for failed runs
             failed_runs = [r for r in runs if r.status == "failed"]
