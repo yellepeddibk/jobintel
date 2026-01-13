@@ -58,3 +58,28 @@ class JobSkill(Base):
     job: Mapped[Job] = relationship(back_populates="skills")
 
     __table_args__ = (Index("idx_job_skills_skill", "skill"),)
+
+
+class IngestRun(Base):
+    """Track ingest run metrics for observability."""
+
+    __tablename__ = "ingest_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    search: Mapped[str | None] = mapped_column(String, nullable=True)
+    limit: Mapped[int | None] = mapped_column(nullable=True)
+
+    status: Mapped[str] = mapped_column(String, nullable=False)  # running|success|failed
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    fetched: Mapped[int] = mapped_column(default=0)
+    inserted_raw: Mapped[int] = mapped_column(default=0)
+    inserted_jobs: Mapped[int] = mapped_column(default=0)
+    inserted_skills: Mapped[int] = mapped_column(default=0)
+
+    warnings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (Index("idx_ingest_runs_started_at", "started_at"),)

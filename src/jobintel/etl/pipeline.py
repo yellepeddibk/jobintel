@@ -7,6 +7,7 @@ Keeps pipeline behavior consistent across all entrypoints.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
@@ -14,6 +15,7 @@ from jobintel.etl.raw import upsert_raw_job
 from jobintel.etl.skills import extract_skills_for_all_jobs
 from jobintel.etl.sources.registry import fetch_from_source
 from jobintel.etl.transform import transform_jobs
+from jobintel.models import IngestRun
 
 
 @dataclass
@@ -75,8 +77,10 @@ def run_ingest(
     """Run full ingest pipeline: fetch from source + ETL.
 
     Steps:
-        1. Fetch jobs from the specified source via registry
-        2. Run ETL pipeline on fetched payloads
+        1. Create IngestRun record (status='running')
+        2. Fetch jobs from the specified source via registry
+        3. Run ETL pipeline on fetched payloads
+        4. Update IngestRun with results (status='success' or 'failed')
 
     Args:
         session: SQLAlchemy session (ETL functions handle commits internally)
@@ -87,19 +91,48 @@ def run_ingest(
     Returns:
         IngestResult with counts and any validation warnings
     """
-    # Fetch from source
-    payloads, warnings = fetch_from_source(source_name, search, limit)
-
-    # Run ETL on fetched payloads
-    etl_result = run_etl_from_payloads(session, payloads)
-
-    return IngestResult(
-        fetched=len(payloads),
-        inserted_raw=etl_result.inserted_raw,
-        inserted_jobs=etl_result.inserted_jobs,
-        inserted_skills=etl_result.inserted_skills,
-        warnings=warnings,
+    # Create ingest run record at start
+    run = IngestRun(
+        source=source_name,
+        search=search if search else None,
+        limit=limit,
+        status="running",
+        started_at=datetime.now(UTC),
     )
+    session.add(run)
+    session.commit()
+
+    try:
+        # Fetch from source
+        payloads, warnings = fetch_from_source(source_name, search, limit)
+
+        # Run ETL on fetched payloads
+        etl_result = run_etl_from_payloads(session, payloads)
+
+        # Update run with success
+        run.status = "success"
+        run.finished_at = datetime.now(UTC)
+        run.fetched = len(payloads)
+        run.inserted_raw = etl_result.inserted_raw
+        run.inserted_jobs = etl_result.inserted_jobs
+        run.inserted_skills = etl_result.inserted_skills
+        run.warnings = warnings if warnings else None
+        session.commit()
+
+        return IngestResult(
+            fetched=len(payloads),
+            inserted_raw=etl_result.inserted_raw,
+            inserted_jobs=etl_result.inserted_jobs,
+            inserted_skills=etl_result.inserted_skills,
+            warnings=warnings,
+        )
+    except Exception as e:
+        # Update run with failure
+        run.status = "failed"
+        run.finished_at = datetime.now(UTC)
+        run.error = str(e)
+        session.commit()
+        raise
 
 
 def run_postprocess(session: Session) -> tuple[int, int]:

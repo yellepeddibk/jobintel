@@ -15,7 +15,7 @@ from jobintel.analytics.top_skills import top_skills
 from jobintel.db import SessionLocal, init_db
 from jobintel.etl.pipeline import run_ingest
 from jobintel.etl.sources.registry import list_sources
-from jobintel.models import Job, JobSkill, RawJob
+from jobintel.models import IngestRun, Job, JobSkill, RawJob
 
 st.set_page_config(page_title="JobIntel Dashboard", layout="wide")
 st.title("JobIntel Dashboard")
@@ -207,7 +207,7 @@ with st.sidebar:
 
 
 # --- Main Content with Tabs ---
-tab_analytics, tab_jobs = st.tabs(["📊 Analytics", "📋 Jobs"])
+tab_analytics, tab_jobs, tab_runs = st.tabs(["📊 Analytics", "📋 Jobs", "🔄 Ingest Runs"])
 
 # ==================== ANALYTICS TAB ====================
 with tab_analytics:
@@ -472,3 +472,78 @@ with tab_jobs:
                                 st.session_state[show_key] = True
                     else:
                         st.write(description_full)
+
+
+# ==================== INGEST RUNS TAB ====================
+with tab_runs:
+    st.subheader("Recent Ingest Runs")
+    st.caption("Track ingest operations for observability and debugging.")
+
+    try:
+        with SessionLocal() as s:
+            runs = s.query(IngestRun).order_by(IngestRun.started_at.desc()).limit(20).all()
+
+        if runs:
+            runs_data = []
+            for run in runs:
+                # Calculate duration
+                duration = ""
+                if run.finished_at and run.started_at:
+                    delta = run.finished_at - run.started_at
+                    duration = f"{delta.total_seconds():.1f}s"
+
+                # Count warnings
+                warnings_count = len(run.warnings) if run.warnings else 0
+
+                # Status emoji
+                status_emoji = {
+                    "success": "✅",
+                    "failed": "❌",
+                    "running": "🔄",
+                }.get(run.status, "❓")
+
+                runs_data.append(
+                    {
+                        "Status": f"{status_emoji} {run.status}",
+                        "Source": run.source,
+                        "Search": run.search or "",
+                        "Started": run.started_at.strftime("%Y-%m-%d %H:%M:%S")
+                        if run.started_at
+                        else "",
+                        "Duration": duration,
+                        "Fetched": run.fetched,
+                        "New Jobs": run.inserted_jobs,
+                        "Skills": run.inserted_skills,
+                        "Warnings": warnings_count,
+                    }
+                )
+
+            runs_df = pd.DataFrame(runs_data)
+            st.dataframe(runs_df, hide_index=True, use_container_width=True)
+
+            # Show details for failed runs
+            failed_runs = [r for r in runs if r.status == "failed"]
+            if failed_runs:
+                st.markdown("### Failed Runs Details")
+                for run in failed_runs:
+                    with st.expander(
+                        f"❌ {run.source} - {run.started_at.strftime('%Y-%m-%d %H:%M:%S')}"
+                    ):
+                        st.error(run.error or "No error message recorded")
+
+            # Show runs with warnings
+            warning_runs = [r for r in runs if r.warnings]
+            if warning_runs:
+                st.markdown("### Runs with Warnings")
+                for run in warning_runs:
+                    with st.expander(
+                        f"⚠️ {run.source} - {run.started_at.strftime('%Y-%m-%d %H:%M:%S')} "
+                        f"({len(run.warnings)} warnings)"
+                    ):
+                        for warning in run.warnings:
+                            st.warning(warning)
+        else:
+            st.info("No ingest runs recorded yet. Use the sidebar to run an ingest operation.")
+    except Exception as e:
+        st.error(f"Failed to load ingest runs: {e}")
+        st.exception(e)
