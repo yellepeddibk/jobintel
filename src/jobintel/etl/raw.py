@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from jobintel.core.config import settings
 from jobintel.models import RawJob
 
 
@@ -26,11 +27,19 @@ def compute_content_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-def upsert_raw_job(session: Session, payload: dict[str, Any]) -> bool:
+def upsert_raw_job(
+    session: Session, payload: dict[str, Any], environment: str | None = None
+) -> bool:
     """Insert a raw job if we have not seen it before.
+
+    Args:
+        session: SQLAlchemy session
+        payload: Raw job payload dict
+        environment: Environment tag (uses settings.ENV if None)
 
     Returns True if inserted, False if it already existed.
     """
+    env = environment or settings.ENV
     payload = dict(payload)  # do not mutate caller
     payload.setdefault("content_hash", compute_content_hash(payload))
 
@@ -45,6 +54,12 @@ def upsert_raw_job(session: Session, payload: dict[str, Any]) -> bool:
     if exists:
         return False
 
-    session.add(RawJob(source=payload.get("source", "unknown"), payload_json=payload))
+    session.add(
+        RawJob(
+            source=payload.get("source", "unknown"),
+            payload_json=payload,
+            environment=env,
+        )
+    )
     session.flush()
     return True

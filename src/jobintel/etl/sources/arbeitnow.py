@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -20,6 +21,46 @@ from jobintel.etl.sources.registry import register_source
 logger = logging.getLogger(__name__)
 
 ARBEITNOW_API_URL = "https://arbeitnow.com/api/job-board-api"
+# Rate limit: wait between API requests to avoid 429 errors
+REQUEST_DELAY_SECONDS = 2.5
+# Retry settings for 429 rate limit errors
+MAX_RETRIES = 3
+RETRY_BACKOFF_SECONDS = 5.0
+
+
+def _fetch_page_with_retry(page: int) -> dict[str, Any] | None:
+    """Fetch a single page from Arbeitnow API with retry on 429.
+
+    Returns the JSON response dict, or None if all retries failed.
+    """
+    for attempt in range(MAX_RETRIES):
+        try:
+            resp = requests.get(
+                ARBEITNOW_API_URL,
+                params={"page": page},
+                timeout=30,
+            )
+            if resp.status_code == 429:
+                wait_time = RETRY_BACKOFF_SECONDS * (attempt + 1)
+                logger.warning(
+                    "Arbeitnow rate limited (429) on page %d, retry %d/%d in %.1fs",
+                    page,
+                    attempt + 1,
+                    MAX_RETRIES,
+                    wait_time,
+                )
+                time.sleep(wait_time)
+                continue
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as e:
+            logger.warning("Arbeitnow API request failed on page %d: %s", page, e)
+            return None
+        except ValueError as e:
+            logger.warning("Arbeitnow API returned invalid JSON on page %d: %s", page, e)
+            return None
+    logger.warning("Arbeitnow API exhausted retries on page %d", page)
+    return None
 
 
 def fetch_arbeitnow_jobs(search: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
@@ -37,19 +78,8 @@ def fetch_arbeitnow_jobs(search: str | None = None, limit: int = 100) -> list[di
     max_pages = 10  # Safety limit to prevent infinite loops
 
     while page <= max_pages and len(payloads) < limit:
-        try:
-            resp = requests.get(
-                ARBEITNOW_API_URL,
-                params={"page": page},
-                timeout=30,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except requests.RequestException as e:
-            logger.warning("Arbeitnow API request failed on page %d: %s", page, e)
-            break
-        except ValueError as e:
-            logger.warning("Arbeitnow API returned invalid JSON on page %d: %s", page, e)
+        data = _fetch_page_with_retry(page)
+        if data is None:
             break
 
         jobs = data.get("data", [])
@@ -82,6 +112,8 @@ def fetch_arbeitnow_jobs(search: str | None = None, limit: int = 100) -> list[di
             break
 
         page += 1
+        # Rate limit to avoid 429 errors
+        time.sleep(REQUEST_DELAY_SECONDS)
 
     logger.info("Fetched %d jobs from Arbeitnow", len(payloads))
     return payloads
