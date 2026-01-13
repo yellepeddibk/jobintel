@@ -10,7 +10,7 @@ from datetime import date, timedelta
 from sqlalchemy import distinct, func, select
 from sqlalchemy.orm import Session
 
-from jobintel.models import Job, JobSkill, RawJob
+from jobintel.models import IngestRun, Job, JobSkill, RawJob
 
 
 def _base_job_query(
@@ -74,8 +74,13 @@ def get_kpis(
         or 0
     )
 
-    # Number of sources
-    sources_count = session.execute(select(func.count(distinct(RawJob.source)))).scalar() or 0
+    # Number of sources (from successful ingest runs)
+    sources_count = (
+        session.execute(
+            select(func.count(distinct(IngestRun.source))).where(IngestRun.status == "success")
+        ).scalar()
+        or 0
+    )
 
     return {
         "total_jobs": total_jobs,
