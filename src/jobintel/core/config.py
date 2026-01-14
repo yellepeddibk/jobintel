@@ -13,7 +13,7 @@ if os.name == "nt":
     os.environ.setdefault("NODEFAULTCURRENTDIRECTORYINEXEPATH", "1")
 
 # Compute absolute path to .env so Streamlit finds it regardless of cwd
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
 ENV_FILE = PROJECT_ROOT / ".env"
 
 
