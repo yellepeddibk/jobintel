@@ -54,8 +54,12 @@ def bucket_expr(
         )
     elif bucket == "day":
         expr = func.date(ts_col)
-    else:  # week (Monday start)
-        expr = func.date(ts_col, "weekday 1", "-7 days")
+    else:  # week - deterministic ISO week start (Monday)
+        # strftime('%w') returns 0=Sun..6=Sat
+        # Convert to days since Monday: (w + 6) % 7 gives Mon=0..Sun=6
+        w = cast(func.strftime("%w", ts_col), Integer)
+        days_since_monday = (w + 6) % 7
+        expr = func.date(ts_col, func.printf("-%d days", days_since_monday))
 
     return expr.label("bucket")
 
