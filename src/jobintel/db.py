@@ -60,6 +60,5 @@ def init_db() -> None:
     else:
         # Development/testing: use create_all() for quick setup
         import jobintel.models  # noqa: F401
-        from jobintel.models import Base
 
         Base.metadata.create_all(bind=engine)
