@@ -6,21 +6,36 @@ import streamlit as st
 from sqlalchemy import func, or_, select
 
 from jobintel.analytics.queries import (
-    PRODUCTION_ENV,
     get_kpis,
     get_skill_trends,
     get_top_skills,
     get_top_skills_by_source,
 )
-from jobintel.analytics.top_skills import top_skills
+from jobintel.core.config import settings
 from jobintel.db import SessionLocal, init_db
 from jobintel.etl.pipeline import run_ingest
 from jobintel.etl.sources.registry import list_sources
 from jobintel.models import IngestRun, Job, JobSkill, RawJob
 
+# Use production environment filter in prod, else use current ENV setting
+DATA_ENV = "production" if settings.is_production else settings.ENV
+
 st.set_page_config(page_title="JobIntel Dashboard", layout="wide")
 st.title("JobIntel Dashboard")
 st.caption("Live ingestion → normalize → extract skills → analytics")
+
+# Debug: show exactly what config the dashboard is using
+with st.sidebar.expander("🔧 Debug Config", expanded=False):
+    st.write("**settings.ENV:**", settings.ENV)
+    st.write("**DATA_ENV:**", DATA_ENV)
+    db_url = settings.DATABASE_URL
+    # Mask password in display
+    safe_db = db_url
+    if "@" in db_url:
+        # Mask everything between : and @ after //
+        import re as _re
+        safe_db = _re.sub(r"(://[^:]+:)[^@]+(@)", r"\1***\2", db_url)
+    st.write("**DATABASE_URL:**", safe_db)
 
 # Ensure tables exist (and surface errors in the UI if DB is unreachable)
 try:
@@ -53,13 +68,13 @@ def strip_html_tags(text: str) -> str:
 
 
 @st.cache_data(ttl=30)
-def get_sources() -> list[str]:
-    """Get list of sources from production environment only."""
+def get_sources(environment: str) -> list[str]:
+    """Get list of sources from specified environment."""
     try:
         with SessionLocal() as s:
             rows = s.execute(
                 select(RawJob.source)
-                .where(RawJob.environment == PRODUCTION_ENV)
+                .where(RawJob.environment == environment)
                 .distinct()
                 .order_by(RawJob.source)
             ).all()
@@ -70,17 +85,17 @@ def get_sources() -> list[str]:
 
 
 @st.cache_data(ttl=30)
-def get_skill_choices(limit: int = 200) -> list[str]:
-    """Get list of skills from production environment only."""
+def get_skill_choices(environment: str, limit: int = 200) -> list[str]:
+    """Get list of skills from specified environment."""
     try:
         with SessionLocal() as s:
             url_expr = RawJob.payload_json["url"].as_string()
-            # Only include skills from jobs in production environment
+            # Only include skills from jobs in specified environment
             rows = s.execute(
                 select(JobSkill.skill)
                 .join(Job, Job.id == JobSkill.job_id)
                 .join(RawJob, url_expr == Job.url)
-                .where(RawJob.environment == PRODUCTION_ENV)
+                .where(RawJob.environment == environment)
                 .distinct()
                 .order_by(JobSkill.skill)
                 .limit(limit)
@@ -93,6 +108,7 @@ def get_skill_choices(limit: int = 200) -> list[str]:
 
 @st.cache_data(ttl=30)
 def get_latest_jobs(
+    environment: str,
     latest_n: int,
     keyword: str | None,
     sources: list[str],
@@ -100,7 +116,7 @@ def get_latest_jobs(
     days_back: int | None = None,
     location_filter: str | None = None,
 ) -> pd.DataFrame:
-    """Get latest jobs from production environment only."""
+    """Get latest jobs from specified environment."""
     try:
         with SessionLocal() as s:
             url_expr = RawJob.payload_json["url"].as_string()
@@ -108,8 +124,8 @@ def get_latest_jobs(
             # Inner join RawJob - required for environment/source filtering
             q = s.query(Job, RawJob.source.label("source")).join(RawJob, url_expr == Job.url)
 
-            # Filter by production environment only
-            q = q.filter(RawJob.environment == PRODUCTION_ENV)
+            # Filter by specified environment
+            q = q.filter(RawJob.environment == environment)
 
             # Filter by date (posted_at or ingested_at as fallback)
             if days_back:
@@ -215,6 +231,19 @@ def get_latest_jobs(
 with st.sidebar:
     st.header("Controls")
 
+    # Cache control with visual feedback
+    if st.button("🗑️ Clear cache", help="Clear cached data to refresh all views"):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+
+        # Clear UI state for a complete reset feel
+        for key in list(st.session_state.keys()):
+            if key.startswith(("jobs_sources", "jobs_skills", "jobs_keyword")):
+                del st.session_state[key]
+
+        st.success("✓ Cache cleared. Rerunning...")
+        st.rerun()
+
     with st.expander("Ingest jobs (no scripts needed)", expanded=True):
         ingest_query = st.text_input("Search", value="engineer")
         ingest_limit = st.number_input("Limit", min_value=1, max_value=500, value=50, step=10)
@@ -263,13 +292,23 @@ with st.sidebar:
 
     keyword = st.text_input("Keyword filter", value="", key="jobs_keyword")
 
-    sources_all = get_sources()
+    sources_all = get_sources(DATA_ENV)
     sources_sel = st.multiselect(
-        "Source filter", options=sources_all, default=[], key="jobs_sources"
+        "Source filter",
+        options=sources_all,
+        default=[],
+        key="jobs_sources_v2",
+        help="Leave empty to include all sources.",
     )
 
-    skills_all = get_skill_choices()
-    skills_sel = st.multiselect("Skill filter", options=skills_all, default=[], key="jobs_skills")
+    skills_all = get_skill_choices(DATA_ENV)
+    skills_sel = st.multiselect(
+        "Skill filter",
+        options=skills_all,
+        default=[],
+        key="jobs_skills",
+        help="Leave empty to include all skills.",
+    )
 
     st.divider()
     st.subheader("Date & Location")
@@ -295,7 +334,7 @@ with tab_analytics:
         with acol1:
             analytics_source = st.selectbox(
                 "Source",
-                options=["All"] + get_sources(),
+                options=["All"] + get_sources(DATA_ENV),
                 key="analytics_source",
             )
         with acol2:
@@ -335,6 +374,7 @@ with tab_analytics:
                 date_from=date_from,
                 date_to=date_to,
                 search=search_filter,
+                environment=DATA_ENV,
             )
 
         kpi1, kpi2, kpi3, kpi4 = st.columns(4)
@@ -363,6 +403,7 @@ with tab_analytics:
                     date_to=date_to,
                     search=search_filter,
                     limit=analytics_limit,
+                    environment=DATA_ENV,
                 )
 
             if top_skills_data:
@@ -383,6 +424,7 @@ with tab_analytics:
                     date_to=date_to,
                     search=search_filter,
                     limit=10,
+                    environment=DATA_ENV,
                 )
 
             if skills_by_source:
@@ -411,6 +453,17 @@ with tab_analytics:
 
     # Skill Trends
     st.markdown("### Skill Trends Over Time")
+
+    # Granularity selector
+    granularity_options = {"Auto": None, "6 hours": "6h", "Daily": "day", "Weekly": "week"}
+    granularity_label = st.selectbox(
+        "Time granularity",
+        options=list(granularity_options.keys()),
+        index=0,
+        help="Auto: 6h for ≤7 days, daily for ≤60 days, weekly for longer periods",
+    )
+    granularity = granularity_options[granularity_label]
+
     try:
         with SessionLocal() as s:
             # Get top 5 skills to show trends for
@@ -420,6 +473,7 @@ with tab_analytics:
                 date_from=date_from,
                 date_to=date_to,
                 limit=5,
+                environment=DATA_ENV,
             )
             skill_names = [skill for skill, _ in top_5_skills]
 
@@ -430,20 +484,35 @@ with tab_analytics:
                     source=source_filter,
                     date_from=date_from,
                     date_to=date_to,
+                    granularity=granularity,
+                    environment=DATA_ENV,
                 )
 
                 if trends_data:
-                    # Pivot for line chart
+                    # Convert to DataFrame and prepare for charting
                     trends_df = pd.DataFrame(trends_data)
+                    trends_df = trends_df.sort_values("bucket")
+
+                    # Convert bucket to datetime when possible for proper x-axis ordering
+                    trends_df["bucket"] = pd.to_datetime(trends_df["bucket"], errors="coerce")
+
                     if not trends_df.empty:
+                        # Check if we have only one bucket (single time point)
+                        unique_buckets = trends_df["bucket"].nunique()
+                        if unique_buckets == 1:
+                            st.warning(
+                                "⚠️ Only one time bucket found. The chart will show markers only. "
+                                "Run more ingestions (every 6 hours) to see trend lines."
+                            )
+
                         trends_pivot = trends_df.pivot(
-                            index="week", columns="skill", values="count"
+                            index="bucket", columns="skill", values="count"
                         ).fillna(0)
                         st.line_chart(trends_pivot)
                     else:
                         st.info("No trend data available for the selected period.")
                 else:
-                    st.info("No trend data available. Jobs may not have posted_at dates.")
+                    st.info("No trend data available. Try adjusting the date range or granularity.")
             else:
                 st.info("No skills found to show trends. Try ingesting some jobs first.")
     except Exception as e:
@@ -458,7 +527,7 @@ with tab_jobs:
         st.subheader("Top Skills")
         try:
             with SessionLocal() as s:
-                skills = top_skills(s, top_n)
+                skills = get_top_skills(s, limit=top_n, environment=DATA_ENV)
             skills_df = pd.DataFrame(skills, columns=["skill", "count"])
             st.dataframe(skills_df, width="stretch", hide_index=True)
         except Exception as e:
@@ -468,6 +537,7 @@ with tab_jobs:
     with col2:
         st.subheader("Latest Ingested Jobs")
         jobs_df = get_latest_jobs(
+            environment=DATA_ENV,
             latest_n=latest_n,
             keyword=keyword.strip() or None,
             sources=sources_sel,
@@ -558,7 +628,7 @@ with tab_runs:
     st.subheader("Recent Ingest Runs")
     st.caption(
         "Track ingest operations for observability and debugging. "
-        "Shows production environment runs only."
+        f"Showing {DATA_ENV} environment runs."
     )
 
     if st.button("🔄 Refresh", key="refresh_runs"):
@@ -568,7 +638,7 @@ with tab_runs:
         with SessionLocal() as s:
             runs = (
                 s.query(IngestRun)
-                .filter(IngestRun.environment == PRODUCTION_ENV)
+                .filter(IngestRun.environment == DATA_ENV)
                 .order_by(IngestRun.started_at.desc())
                 .limit(20)
                 .all()

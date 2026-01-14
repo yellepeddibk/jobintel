@@ -1,4 +1,0 @@
-{"source":"sample","title":"Data Scientist","company":"Acme","location":"Remote","url":"https://example.com/jobs/1","posted_at":"2025-12-01","description":"Python, SQL, pandas. Experience with AWS is a plus."}
-{"source":"sample","title":"Data Scientist","company":"Acme","location":"Remote","url":"https://example.com/jobs/1","posted_at":"2025-12-01","description":"Python, SQL, pandas. Experience with AWS is a plus."}
-{"source":"sample","title":"Backend Engineer","company":"Beta","location":"Austin, TX","url":"https://example.com/jobs/2","posted_at":"2025-12-05","description":"FastAPI, Postgres, Docker. Build APIs."}
-{"source":"sample","title":"ML Engineer","company":"Gamma","location":"Chicago, IL","url":"https://example.com/jobs/3","posted_at":"2025-12-07","description":"scikit-learn, ML pipelines, testing, CI."}

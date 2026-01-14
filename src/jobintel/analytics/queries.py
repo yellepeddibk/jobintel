@@ -1,20 +1,63 @@
 """Analytics queries for the JobIntel dashboard.
 
 All functions return plain Python structures for easy testing and caching.
-Queries filter by production environment by default to exclude test/sample data.
+Queries filter by production environment by default to exclude test data.
 """
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from typing import Literal
 
-from sqlalchemy import distinct, func, select
+from sqlalchemy import Integer, cast, distinct, func, select, text
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import expression
 
 from jobintel.models import IngestRun, Job, JobSkill, RawJob
 
 # Default environment filter for dashboard queries
 PRODUCTION_ENV = "production"
+
+# Bucket granularity options
+Bucket = Literal["6h", "day", "week"]
+
+
+def bucket_expr(
+    ts_col: expression.ColumnElement,
+    bucket: Bucket,
+    dialect_name: str,
+) -> expression.Label:
+    """
+    Time bucketing that works on Postgres + SQLite.
+    Returns an expression labeled 'bucket'.
+    """
+    if dialect_name == "postgresql":
+        if bucket == "6h":
+            # date_trunc('day', ts) + floor(extract(hour)/6) * interval '6 hours'
+            hours_block = func.floor(func.extract("hour", ts_col) / 6)
+            expr = func.date_trunc("day", ts_col) + (hours_block * text("interval '6 hours'"))
+        elif bucket == "day":
+            expr = func.date_trunc("day", ts_col)
+        else:  # week
+            expr = func.date_trunc("week", ts_col)
+
+        return expr.label("bucket")
+
+    # SQLite
+    if bucket == "6h":
+        hour_int = cast(func.strftime("%H", ts_col), Integer)
+        bucket_hour = (hour_int / 6) * 6  # integer division in SQLite if both ints
+        # Build: YYYY-MM-DD HH:00:00 where HH is 00/06/12/18
+        expr = func.datetime(
+            func.strftime("%Y-%m-%d ", ts_col),
+            func.printf("%02d:00:00", bucket_hour),
+        )
+    elif bucket == "day":
+        expr = func.date(ts_col)
+    else:  # week (Monday start)
+        expr = func.date(ts_col, "weekday 1", "-7 days")
+
+    return expr.label("bucket")
 
 
 def _base_job_query(
@@ -155,23 +198,51 @@ def get_skill_trends(
     source: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    granularity: Bucket | None = None,
     environment: str = PRODUCTION_ENV,
 ) -> list[dict]:
-    """Get skill counts over time, bucketed by week.
+    """Get skill counts over time, bucketed by granularity.
 
-    Returns list of dicts: [{"week": date, "skill": str, "count": int}, ...]
-    Bucketing is done in Python for cross-DB compatibility.
-    Uses ingested_at as fallback when posted_at is NULL.
+    Args:
+        session: SQLAlchemy session
+        skills: List of skill names to track
+        source: Optional source filter
+        date_from: Optional start date (inclusive)
+        date_to: Optional end date (inclusive)
+        granularity: '6h', 'day', or 'week'. If None, auto-detects based on date range.
+        environment: Environment filter (default: production)
+
+    Returns:
+        List of dicts: [{"bucket": str, "skill": str, "count": int}, ...]
+        Bucket is a timestamp string for charting.
     """
     if not skills:
         return []
 
-    url_expr = RawJob.payload_json["url"].as_string()
+    # Auto-detect granularity based on date range
+    if granularity is None:
+        if date_from and date_to:
+            days = (date_to - date_from).days
+            if days <= 7:
+                granularity = "6h"
+            elif days <= 60:
+                granularity = "day"
+            else:
+                granularity = "week"
+        else:
+            # Default to 6h to match ingestion cadence
+            granularity = "6h"
 
-    # Select both dates so we can use ingested_at as fallback
+    url_expr = RawJob.payload_json["url"].as_string()
+    dialect_name = session.bind.dialect.name if session.bind else "sqlite"
+
+    # Use bucket_expr for time bucketing in the database
+    bucket_col = bucket_expr(RawJob.ingested_at, granularity, dialect_name)
+    count_col = func.count(distinct(JobSkill.job_id)).label("count")
+
     q = (
-        session.query(Job.posted_at, RawJob.ingested_at, JobSkill.skill)
-        .join(JobSkill, JobSkill.job_id == Job.id)
+        session.query(bucket_col, JobSkill.skill, count_col)
+        .join(Job, Job.id == JobSkill.job_id)
         .join(RawJob, url_expr == Job.url)  # Inner join for environment filtering
         .filter(JobSkill.skill.in_(skills))
     )
@@ -182,35 +253,27 @@ def get_skill_trends(
     if source:
         q = q.filter(RawJob.source == source)
 
+    # Use proper datetime comparison for index efficiency
     if date_from:
-        # Filter on either date
-        q = q.filter((Job.posted_at >= date_from) | (RawJob.ingested_at >= date_from))
+        start_dt = datetime.combine(date_from, datetime.min.time())
+        q = q.filter(RawJob.ingested_at >= start_dt)
 
     if date_to:
-        q = q.filter((Job.posted_at <= date_to) | (RawJob.ingested_at <= date_to))
+        end_dt = datetime.combine(date_to, datetime.max.time())
+        q = q.filter(RawJob.ingested_at < end_dt)
 
-    # Fetch all rows and bucket in Python
+    # Group by bucket and skill
+    q = q.group_by(bucket_col, JobSkill.skill).order_by(bucket_col)
+
     rows = q.all()
 
-    # Bucket by week (Monday start)
-    from collections import defaultdict
-
-    weekly_counts: dict[tuple[date, str], int] = defaultdict(int)
-    for posted_at, ingested_at, skill in rows:
-        # Use posted_at if available, otherwise fall back to ingested_at
-        effective_date = posted_at
-        if effective_date is None and ingested_at is not None:
-            effective_date = ingested_at.date()
-        if effective_date:
-            # Get the Monday of the week
-            week_start = effective_date - timedelta(days=effective_date.weekday())
-            weekly_counts[(week_start, skill)] += 1
-
     # Convert to list of dicts
-    result = [
-        {"week": week, "skill": skill, "count": count}
-        for (week, skill), count in sorted(weekly_counts.items())
-    ]
+    result = []
+    for bucket, skill, count in rows:
+        # Convert bucket to string for consistent output
+        bucket_str = str(bucket) if bucket else None
+        if bucket_str:
+            result.append({"bucket": bucket_str, "skill": skill, "count": int(count)})
 
     return result
 

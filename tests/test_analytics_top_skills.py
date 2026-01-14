@@ -1,27 +1,17 @@
-from sqlalchemy import text
+"""Tests for analytics top_skills function."""
+
+from fixtures import seed_and_transform
 
 from jobintel.analytics.top_skills import top_skills
-from jobintel.db import SessionLocal, init_db
-from jobintel.etl.load_raw import load_raw_jobs
-from jobintel.etl.skills import extract_skills_for_all_jobs
-from jobintel.etl.transform import transform_jobs
 
 
-def test_top_skills_returns_counts():
-    init_db()
+def test_top_skills_returns_counts(session):
+    """top_skills should return skill names with positive counts."""
+    seed_and_transform(session, environment="test")
 
-    with SessionLocal() as session:
-        session.execute(text("DELETE FROM job_skills"))
-        session.execute(text("DELETE FROM jobs"))
-        session.execute(text("DELETE FROM raw_jobs"))
-        session.commit()
+    rows = top_skills(session, limit=50)
+    skills = {s for (s, _) in rows}
 
-        load_raw_jobs(session, "data/sample_jobs.jsonl")
-        transform_jobs(session)
-        extract_skills_for_all_jobs(session)
-
-        rows = top_skills(session, limit=50)
-        skills = {s for (s, _) in rows}
-
-        assert "python" in skills
-        assert all(n > 0 for (_, n) in rows)
+    # Our test data has Python in multiple jobs
+    assert "python" in skills, "Python should be in top skills"
+    assert all(n > 0 for (_, n) in rows), "All counts should be positive"

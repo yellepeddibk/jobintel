@@ -10,8 +10,8 @@ def main() -> None:
         rows = top_skills(session, limit=20)
 
     if not rows:
-        print("No skills found. Run the sample ETL first:")
-        print("  python scripts/run_sample_etl.py")
+        print("No skills found. Run the live ETL first:")
+        print("  python scripts/run_live_etl.py")
         return
 
     print("skill\tcount")

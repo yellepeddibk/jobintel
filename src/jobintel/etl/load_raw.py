@@ -27,13 +27,19 @@ def load_raw_jobs(
     path = Path(jsonl_path)
     inserted = 0
 
+    if not path.exists():
+        raise FileNotFoundError(f"JSONL file not found: {path}")
+
     with path.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
             payload = json.loads(line)
-            payload.setdefault("source", "sample")
+
+            # Require 'source' field - no silent defaults
+            if "source" not in payload or not payload["source"]:
+                raise ValueError(f"JSONL payload missing required field 'source': {payload}")
 
             if upsert_raw_job(session, payload, environment=env):
                 inserted += 1

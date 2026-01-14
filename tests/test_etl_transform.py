@@ -1,26 +1,29 @@
-from sqlalchemy import select, text
+"""Tests for ETL transform step."""
 
-from jobintel.db import SessionLocal, init_db
-from jobintel.etl.load_raw import load_raw_jobs
+from fixtures import TEST_JOB_DUPLICATE, seed_test_data
+
+from jobintel.etl.raw import upsert_raw_job
 from jobintel.etl.transform import transform_jobs
 from jobintel.models import Job
 
 
-def test_transform_dedupes_by_url():
-    init_db()
+def test_transform_dedupes_by_url(session):
+    """Transform should deduplicate jobs by URL."""
+    # Insert test data (4 unique jobs)
+    seed_test_data(session, environment="test")
 
-    with SessionLocal() as session:
-        # Clear persistent SQLite tables so test is repeatable
-        session.execute(text("DELETE FROM job_skills"))
-        session.execute(text("DELETE FROM jobs"))
-        session.execute(text("DELETE FROM raw_jobs"))
-        session.commit()
+    # Insert a duplicate (same URL as first job)
+    upsert_raw_job(session, TEST_JOB_DUPLICATE, environment="test")
+    session.commit()
 
-        load_raw_jobs(session, "data/sample_jobs.jsonl")
-        inserted = transform_jobs(session)
+    inserted = transform_jobs(session)
 
-        # sample has 4 raw rows but 1 duplicate url
-        assert inserted == 3
+    # Should only create 4 unique jobs (duplicate URL skipped)
+    assert inserted == 4
 
-        jobs = session.execute(select(Job)).scalars().all()
-        assert len(jobs) == 3
+    jobs = session.query(Job).all()
+    assert len(jobs) == 4
+
+    # Verify no duplicate URLs
+    urls = [j.url for j in jobs]
+    assert len(urls) == len(set(urls)), "Jobs should have unique URLs"

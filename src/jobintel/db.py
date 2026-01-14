@@ -31,13 +31,36 @@ class Base(DeclarativeBase):
 def init_db() -> None:
     """Initialize database schema.
 
+    For production: Runs Alembic migrations (alembic upgrade head).
     For development/testing: Uses SQLAlchemy create_all() for quick setup.
-    For production: Should use Alembic migrations (alembic upgrade head).
 
-    This function is safe to call multiple times; create_all() is idempotent.
+    This function is safe to call multiple times.
     """
-    # Make sure all model classes are imported so they register with Base.metadata
-    import jobintel.models  # noqa: F401
-    from jobintel.models import Base
+    from jobintel.core.config import settings
 
-    Base.metadata.create_all(bind=engine)
+    if settings.is_production:
+        # Production: use Alembic migrations for safe, versioned schema changes
+        import os
+        from pathlib import Path
+
+        from alembic.config import Config
+
+        from alembic import command
+
+        project_root = Path(__file__).resolve().parents[2]
+        alembic_ini = project_root / "alembic.ini"
+        config = Config(str(alembic_ini))
+        config.set_main_option("script_location", str(project_root / "alembic"))
+
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(project_root)
+            command.upgrade(config, "head")
+        finally:
+            os.chdir(old_cwd)
+    else:
+        # Development/testing: use create_all() for quick setup
+        import jobintel.models  # noqa: F401
+        from jobintel.models import Base
+
+        Base.metadata.create_all(bind=engine)
