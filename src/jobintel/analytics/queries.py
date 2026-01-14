@@ -264,7 +264,7 @@ def get_skill_trends(
 
     if date_to:
         end_dt = datetime.combine(date_to, datetime.max.time())
-        q = q.filter(RawJob.ingested_at < end_dt)
+        q = q.filter(RawJob.ingested_at <= end_dt)
 
     # Group by bucket and skill
     q = q.group_by(bucket_col, JobSkill.skill).order_by(bucket_col)
