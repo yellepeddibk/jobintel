@@ -36,7 +36,6 @@ def init_db() -> None:
 
     This function is safe to call multiple times.
     """
-    from jobintel.core.config import settings
 
     if settings.is_production:
         # Production: use Alembic migrations for safe, versioned schema changes
