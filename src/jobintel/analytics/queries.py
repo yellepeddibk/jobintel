@@ -46,7 +46,7 @@ def bucket_expr(
     # SQLite
     if bucket == "6h":
         hour_int = cast(func.strftime("%H", ts_col), Integer)
-        bucket_hour = (hour_int / 6) * 6  # integer division in SQLite if both ints
+        bucket_hour = hour_int - (hour_int % 6)
         # Build: YYYY-MM-DD HH:00:00 where HH is 00/06/12/18
         expr = func.datetime(
             func.strftime("%Y-%m-%d ", ts_col),
