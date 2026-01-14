@@ -96,7 +96,7 @@ class TestBucketExpr:
     def test_bucket_week_groups_same_week(self, session):
         """Week bucketing should group records in the same week."""
         # Create jobs on Mon, Wed, Fri of the same week
-        base_monday = datetime(2026, 1, 13)  # A Monday
+        base_monday = datetime(2026, 1, 12)  # A Monday
         times = [
             base_monday,
             base_monday + timedelta(days=2),  # Wednesday
