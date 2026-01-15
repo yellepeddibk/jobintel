@@ -38,7 +38,10 @@ jobs:
       - name: Run live ETL
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: python scripts/run_live_etl.py
+        run: |
+          python scripts/run_live_etl.py --source remotive
+          python scripts/run_live_etl.py --source arbeitnow
+          python scripts/run_live_etl.py --source remoteok
 
       - name: Report status
         if: always()
