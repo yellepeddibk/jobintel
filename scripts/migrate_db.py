@@ -53,9 +53,9 @@ def run_upgrade() -> bool:
     from alembic import command
 
     _add_src_to_path()
-    from jobintel.core.config import settings
+    from jobintel.core.config import redact_db_url, settings
 
-    print(f"Running migrations against: {settings.DATABASE_URL[:50]}...")
+    print(f"Running migrations against: {redact_db_url(settings.DATABASE_URL)}")
     config = get_alembic_config()
 
     old_cwd = os.getcwd()
@@ -78,10 +78,10 @@ def main() -> int:
     args = parser.parse_args()
 
     _add_src_to_path()
-    from jobintel.core.config import settings
+    from jobintel.core.config import redact_db_url, settings
 
     print(f"Environment: {settings.ENV}")
-    print(f"Database: {settings.DATABASE_URL[:50]}...")
+    print(f"Database: {redact_db_url(settings.DATABASE_URL)}")
     print()
 
     current = get_current_revision(settings.DATABASE_URL)

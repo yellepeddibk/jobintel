@@ -65,4 +65,32 @@ def get_settings() -> Settings:
     return Settings()
 
 
+def redact_db_url(url: str) -> str:
+    """Redact password from database URL for safe logging.
+
+    Args:
+        url: Database connection string
+
+    Returns:
+        URL with password replaced by '***'
+    """
+    try:
+        from sqlalchemy.engine import make_url
+
+        parsed = make_url(url)
+        if parsed.password:
+            parsed = parsed.set(password="***")
+        return str(parsed)
+    except Exception:
+        # Fallback: crude redaction
+        if "://" in url and "@" in url:
+            protocol, rest = url.split("://", 1)
+            if "@" in rest:
+                creds, host = rest.rsplit("@", 1)
+                if ":" in creds:
+                    user, _ = creds.split(":", 1)
+                    return f"{protocol}://{user}:***@{host}"
+        return "***"
+
+
 settings = get_settings()

@@ -48,10 +48,10 @@ def check_environment_distribution() -> tuple[dict[str, int], dict[str, int]]:
 
 def main() -> int:
     _add_src_to_path()
-    from jobintel.core.config import settings
+    from jobintel.core.config import redact_db_url, settings
 
     print(f"Environment: {settings.ENV}")
-    print(f"Database: {settings.DATABASE_URL[:50]}...")
+    print(f"Database: {redact_db_url(settings.DATABASE_URL)}")
     print()
 
     try:
