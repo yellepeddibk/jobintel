@@ -1,6 +1,11 @@
 # JobIntel
 
+[![CI](https://github.com/yellepeddibk/jobintel/actions/workflows/ci.yml/badge.svg)](https://github.com/yellepeddibk/jobintel/actions/workflows/ci.yml)
+[![Scheduled Ingestion](https://github.com/yellepeddibk/jobintel/actions/workflows/ingest-jobs.yml/badge.svg)](https://github.com/yellepeddibk/jobintel/actions/workflows/ingest-jobs.yml)
+
 A production-grade job market intelligence platform that aggregates job postings from multiple sources, normalizes data through a robust ETL pipeline, extracts skill requirements using NLP techniques, and provides real-time analytics through an interactive dashboard.
+
+**[🚀 Live Dashboard](https://jobintel-main.streamlit.app/)**
 
 ---
 
@@ -172,23 +177,28 @@ Each pipeline run is tracked in the `ingest_runs` table with:
 ### Multi-Source Ingestion
 - Pluggable source architecture supporting multiple job boards
 - Currently integrated: Remotive, RemoteOK, Arbeitnow
+- Automated ingestion via GitHub Actions (every 6 hours)
 - Rate limiting and retry logic for API reliability
 
 ### Real-Time Dashboard
 - Interactive job browser with filtering by source, skills, location, and date
 - Top skills visualization with configurable limits
-- Skill trend charts showing demand over time
+- Time-bucketed skill trends with granularity selector (6-hour, daily, weekly)
+- Auto-detection of optimal granularity based on date range
+- Skills by source comparison charts
 - Ingest run monitoring for operational visibility
 
-### Environment Isolation
-- Separation of development, test, and production data
-- Sample data blocked from production environment
-- Dashboard displays only production-tagged records
+### Production Infrastructure
+- Neon PostgreSQL for serverless production database
+- Streamlit Cloud for zero-ops dashboard hosting
+- GitHub Actions for scheduled data collection
+- Environment isolation (development, test, production)
 
 ### Data Quality
 - Content-hash based deduplication prevents duplicate ingestion
 - URL-based job deduplication ensures unique listings
 - Validation warnings surfaced in ingest run logs
+- Idempotent pipeline operations safe to re-run
 
 ---
 
@@ -197,15 +207,17 @@ Each pipeline run is tracked in the `ingest_runs` table with:
 | Layer | Technology |
 |-------|------------|
 | Language | Python 3.11+ |
-| Database | PostgreSQL 15+ |
+| Database | PostgreSQL 15+ (Neon serverless in production) |
 | ORM | SQLAlchemy 2.0 with DeclarativeBase |
 | Migrations | Alembic |
-| Web Framework | Streamlit |
+| Dashboard | Streamlit (Streamlit Cloud in production) |
+| Visualization | Plotly, Pandas |
 | HTTP Client | Requests |
 | Configuration | Pydantic Settings |
-| Testing | Pytest |
+| CI/CD | GitHub Actions |
+| Testing | Pytest (48 tests) |
 | Linting | Ruff |
-| Containerization | Docker Compose |
+| Containerization | Docker Compose (local development) |
 
 ---
 
@@ -275,9 +287,9 @@ Configuration is managed through environment variables, with support for `.env` 
 
 | Mode | Behavior |
 |------|----------|
-| `development` | Default for local development. Sample ETL allowed. |
-| `test` | For running tests. Sample ETL allowed. |
-| `production` | For deployment. Sample ETL blocked. Dashboard shows only production data. |
+| `development` | Default for local development. Uses local SQLite or Docker Postgres. |
+| `test` | For running tests. Isolated test database with fixtures. |
+| `production` | For deployment. Dashboard shows only production-tagged records. |
 
 ### Example `.env` File
 
@@ -292,6 +304,10 @@ ENV=production
 
 ```
 jobintel/
+├── .github/
+│   └── workflows/
+│       ├── ci.yml              # CI pipeline (lint + test)
+│       └── ingest-jobs.yml     # Scheduled ingestion (every 6h)
 ├── alembic/                    # Database migrations
 │   ├── versions/               # Migration scripts
 │   └── env.py                  # Alembic configuration
@@ -305,13 +321,13 @@ jobintel/
 │   ├── init_db.py              # Database initialization
 │   ├── migrate_db.py           # Run Alembic migrations
 │   ├── report_top_skills.py    # CLI skill report
-│   └── run_live_etl.py         # CLI ETL runner
+│   └── run_live_etl.py         # CLI ETL runner (used by GitHub Actions)
 ├── src/jobintel/
 │   ├── analytics/
-│   │   ├── queries.py          # Dashboard query functions
+│   │   ├── queries.py          # Dashboard query functions (KPIs, trends, bucketing)
 │   │   └── top_skills.py       # Skill aggregation logic
 │   ├── core/
-│   │   └── config.py           # Application settings
+│   │   └── config.py           # Application settings (Streamlit secrets support)
 │   ├── etl/
 │   │   ├── sources/            # Source adapters
 │   │   │   ├── arbeitnow.py
@@ -326,8 +342,15 @@ jobintel/
 │   │   └── transform.py        # Job normalization
 │   ├── db.py                   # Database setup
 │   └── models.py               # SQLAlchemy models
-├── tests/                      # Test suite
-├── docker-compose.yml          # PostgreSQL container
+├── tests/
+│   ├── conftest.py             # Pytest fixtures and configuration
+│   ├── fixtures.py             # Test data fixtures
+│   ├── test_analytics_*.py     # Analytics query tests
+│   ├── test_bucket_expr.py     # Time bucket SQL tests
+│   ├── test_etl_*.py           # ETL pipeline tests
+│   ├── test_sources_*.py       # Source adapter tests
+│   └── ...                     # Additional test modules
+├── docker-compose.yml          # PostgreSQL container (local dev)
 ├── pyproject.toml              # Project metadata
 ├── requirements.txt            # Production dependencies
 └── requirements-dev.txt        # Development dependencies
@@ -337,6 +360,8 @@ jobintel/
 
 ## Testing
 
+The project maintains **48 tests** covering all core functionality.
+
 ```bash
 # Run all tests
 pytest
@@ -345,7 +370,7 @@ pytest
 pytest -v
 
 # Run specific test file
-pytest tests/test_etl_pipeline.py
+pytest tests/test_etl_transform.py
 
 # Run with coverage
 pytest --cov=src/jobintel
@@ -355,27 +380,63 @@ pytest --cov=src/jobintel
 
 | Category | Description |
 |----------|-------------|
-| `test_analytics_*.py` | Query function tests |
+| `test_analytics_*.py` | Query functions, KPIs, skill aggregation |
+| `test_bucket_expr.py` | Time bucket SQL for Postgres and SQLite |
 | `test_etl_*.py` | ETL pipeline component tests |
 | `test_sources_*.py` | Source adapter tests |
 | `test_environment_filtering.py` | Environment isolation guardrail tests |
 | `test_ingest_runs.py` | Pipeline observability tests |
+| `test_db_init.py` | Database initialization tests |
 
 ---
 
 ## Deployment
 
-### Streamlit Cloud
+### Production Architecture
+
+```
+┌─────────────────────┐     ┌──────────────────────┐     ┌─────────────────────┐
+│   Streamlit Cloud   │────▶│   Neon PostgreSQL    │◀────│   GitHub Actions    │
+│   (Dashboard)       │     │   (Database)         │     │   (Ingestion)       │
+└─────────────────────┘     └──────────────────────┘     └─────────────────────┘
+        ▲                                                         │
+        │                                                         │
+    Users view                                              Every 6 hours:
+    analytics                                               - Fetch from APIs
+                                                            - Transform & load
+                                                            - Extract skills
+```
+
+### 1. Database Setup (Neon)
+
+1. Create a free account at [neon.tech](https://neon.tech)
+2. Create a new project (e.g., `jobintel`)
+3. Copy the connection string
+4. Initialize tables:
+   ```bash
+   export DATABASE_URL="postgresql+psycopg://user:pass@host/db?sslmode=require"
+   export ENV="production"
+   python -c "from jobintel.db import init_db; init_db()"
+   alembic stamp head
+   ```
+
+### 2. Dashboard Hosting (Streamlit Cloud)
 
 1. Push repository to GitHub
-2. Connect repository to Streamlit Cloud
+2. Connect repository to [Streamlit Cloud](https://share.streamlit.io)
 3. Set secrets in Streamlit Cloud dashboard:
-   ```
-   DATABASE_URL = "postgresql+psycopg://..."
+   ```toml
+   DATABASE_URL = "postgresql+psycopg://user:pass@host/db?sslmode=require"
    ENV = "production"
    ```
 4. Set main file path: `app/dashboard.py`
 5. Deploy
+
+### 3. Automated Ingestion (GitHub Actions)
+
+1. Add repository secret `DATABASE_URL` with your Neon connection string
+2. The workflow runs automatically every 6 hours
+3. Manual trigger available in Actions tab → "Ingest Jobs" → "Run workflow"
 
 ### Database Migrations
 
@@ -388,6 +449,16 @@ alembic revision --autogenerate -m "description"
 
 # View migration history
 alembic history
+```
+
+### Local Development
+
+```bash
+# Start local PostgreSQL
+docker-compose up -d
+
+# Or use SQLite (default)
+streamlit run app/dashboard.py
 ```
 
 ---
