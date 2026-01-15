@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 from jobintel.core.config import settings
 
@@ -22,10 +22,6 @@ engine = create_engine(
 )
 
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-
-
-class Base(DeclarativeBase):
-    pass
 
 
 def init_db() -> None:
@@ -59,6 +55,6 @@ def init_db() -> None:
             os.chdir(old_cwd)
     else:
         # Development/testing: use create_all() for quick setup
-        import jobintel.models  # noqa: F401
+        from jobintel.models import Base
 
         Base.metadata.create_all(bind=engine)
