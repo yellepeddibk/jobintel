@@ -38,20 +38,20 @@ with st.sidebar.expander("🔧 Debug Config", expanded=False):
     st.write("**DATABASE_URL:**", safe_db)
 
 # Ensure tables exist (and surface errors in the UI if DB is unreachable)
+# Skip Alembic migrations on Streamlit Cloud - tables are managed separately
 try:
-    init_db()
+    init_db(skip_migrations=True)
     # Test DB connection immediately
     with SessionLocal() as test_session:
         test_session.execute(select(1))
     st.success("✓ Database connected")
 except Exception as e:
     st.error(
-        "❌ Database connection failed. Check DATABASE_URL and ensure "
-        "Postgres is running on port 5433."
+        "❌ Database connection failed. Check DATABASE_URL in Streamlit secrets."
     )
     st.exception(e)
     st.info(
-        "Expected format: postgresql+psycopg://jobintel:jobintel_dev_password@127.0.0.1:5433/jobintel"
+        "Expected format: postgresql+psycopg://user:password@host/database?sslmode=require"
     )
     st.stop()
 
