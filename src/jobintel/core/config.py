@@ -12,6 +12,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 if os.name == "nt":
     os.environ.setdefault("NODEFAULTCURRENTDIRECTORYINEXEPATH", "1")
 
+# Streamlit Cloud: Copy st.secrets to os.environ so pydantic can read them.
+# This must happen before Settings() is instantiated.
+try:
+    import streamlit as st
+    if hasattr(st, "secrets"):
+        for key in ("DATABASE_URL", "ENV"):
+            if key in st.secrets:
+                os.environ[key] = st.secrets[key]
+except Exception:
+    pass  # Not running in Streamlit context
+
 # Compute absolute path to .env so Streamlit finds it regardless of cwd
 # Path: config.py -> core/ -> jobintel/ -> src/ -> PROJECT_ROOT
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
