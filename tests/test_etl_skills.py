@@ -1,30 +1,23 @@
-from sqlalchemy import select, text
+"""Tests for ETL skills extraction."""
 
-from jobintel.db import SessionLocal, init_db
-from jobintel.etl.load_raw import load_raw_jobs
+from fixtures import seed_test_data
+
 from jobintel.etl.skills import extract_skills_for_all_jobs
 from jobintel.etl.transform import transform_jobs
 from jobintel.models import JobSkill
 
 
-def test_extract_skills_is_idempotent():
-    init_db()
+def test_extract_skills_is_idempotent(session):
+    """Running skills extraction twice should not duplicate skills."""
+    seed_test_data(session, environment="test")
+    transform_jobs(session)
 
-    with SessionLocal() as session:
-        # Clear persistent SQLite tables so test is repeatable
-        session.execute(text("DELETE FROM job_skills"))
-        session.execute(text("DELETE FROM jobs"))
-        session.execute(text("DELETE FROM raw_jobs"))
-        session.commit()
+    first = extract_skills_for_all_jobs(session)
+    second = extract_skills_for_all_jobs(session)
 
-        load_raw_jobs(session, "data/sample_jobs.jsonl")
-        transform_jobs(session)
+    assert first > 0, "First run should extract some skills"
+    assert second == 0, "Second run should extract zero (already processed)"
 
-        first = extract_skills_for_all_jobs(session)
-        second = extract_skills_for_all_jobs(session)
-
-        assert first > 0
-        assert second == 0
-
-        pairs = session.execute(select(JobSkill.job_id, JobSkill.skill)).all()
-        assert len(pairs) == len(set(pairs))
+    # Verify no duplicate (job_id, skill) pairs
+    pairs = session.query(JobSkill.job_id, JobSkill.skill).all()
+    assert len(pairs) == len(set(pairs)), "Should have no duplicate skill assignments"

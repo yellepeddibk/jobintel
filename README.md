@@ -297,16 +297,15 @@ jobintel/
 │   └── env.py                  # Alembic configuration
 ├── app/
 │   └── dashboard.py            # Streamlit dashboard application
-├── data/
-│   └── sample_jobs.jsonl       # Sample data for testing
 ├── db/
 │   └── schema.sql              # Reference SQL schema
 ├── scripts/
+│   ├── check_prod_data.py      # Production data validation
 │   ├── fetch_remotive.py       # Standalone fetch script
-│   ├── fix_sample_environment.py  # One-time data cleanup
 │   ├── init_db.py              # Database initialization
-│   ├── run_live_etl.py         # CLI ETL runner
-│   └── run_sample_etl.py       # Sample data loader (blocked in prod)
+│   ├── migrate_db.py           # Run Alembic migrations
+│   ├── report_top_skills.py    # CLI skill report
+│   └── run_live_etl.py         # CLI ETL runner
 ├── src/jobintel/
 │   ├── analytics/
 │   │   ├── queries.py          # Dashboard query functions

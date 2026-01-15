@@ -1,4 +1,4 @@
-"""Tests for environment separation - ensures sample data never pollutes production views.
+"""Tests for environment separation - ensures test data never pollutes production views.
 
 This is a guardrail test to prevent regression on environment filtering.
 """
@@ -38,13 +38,13 @@ def test_queries_exclude_non_production_data(session):
     }
     upsert_raw_job(session, prod_payload, environment="production")
 
-    # Insert a test/sample job
+    # Insert a test job (using a real source, but tagged as test environment)
     test_payload = {
-        "source": "sample",
+        "source": "arbeitnow",
         "title": "Test Engineer",
-        "company": "FakeCorp",
+        "company": "TestCorp",
         "location": "Nowhere",
-        "url": "https://fake.com/job/1",
+        "url": "https://test.com/job/1",
         "description": "Testing, QA, Selenium",
     }
     upsert_raw_job(session, test_payload, environment="test")
@@ -70,13 +70,12 @@ def test_queries_exclude_non_production_data(session):
     assert "selenium" not in skill_names, "Test job skills should be excluded"
 
 
-def test_sample_data_tagged_as_test_environment(session):
-    """Data from sample source should be tagged with test environment."""
-    # Verify our raw.py correctly accepts environment parameter
+def test_environment_is_correctly_tagged(session):
+    """Data should be tagged with the specified environment."""
     payload = {
-        "source": "sample",
-        "title": "Sample Job",
-        "url": "https://sample.com/1",
+        "source": "remotive",
+        "title": "Test Job",
+        "url": "https://example.com/1",
     }
 
     # When we explicitly set environment='test', it should stick
@@ -84,8 +83,8 @@ def test_sample_data_tagged_as_test_environment(session):
     session.commit()
 
     raw_job = session.query(RawJob).first()
-    assert raw_job.environment == "test", "Sample data should have test environment"
-    assert raw_job.source == "sample"
+    assert raw_job.environment == "test", "Job should have test environment"
+    assert raw_job.source == "remotive"
 
 
 def test_production_is_default_environment_constant():
