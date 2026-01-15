@@ -266,8 +266,25 @@ streamlit run app/dashboard.py
 
 ### Ingesting Jobs
 
-1. Navigate to the dashboard
-2. Select a source from the dropdown (Remotive, RemoteOK, Arbeitnow)
+**Automated (Production):**
+- GitHub Actions runs every 6 hours
+- Ingests from all 3 sources automatically (Remotive, RemoteOK, Arbeitnow)
+
+**Manual (CLI):**
+```bash
+# Ingest from all sources (default)
+python scripts/run_live_etl.py
+
+# Ingest from specific source
+python scripts/run_live_etl.py --source remotive
+
+# With search filter
+python scripts/run_live_etl.py --search "python" --source arbeitnow
+```
+
+**Manual (Dashboard):**
+1. Navigate to the "Ingest" tab
+2. Select a source from the dropdown
 3. Optionally enter a search query
 4. Click "Run Ingest" to fetch and process jobs
 5. View results in the Jobs tab
@@ -321,7 +338,7 @@ jobintel/
 │   ├── init_db.py              # Database initialization
 │   ├── migrate_db.py           # Run Alembic migrations
 │   ├── report_top_skills.py    # CLI skill report
-│   └── run_live_etl.py         # CLI ETL runner (used by GitHub Actions)
+│   └── run_live_etl.py         # CLI ETL runner (ingests all sources by default)
 ├── src/jobintel/
 │   ├── analytics/
 │   │   ├── queries.py          # Dashboard query functions (KPIs, trends, bucketing)
