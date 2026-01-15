@@ -4,8 +4,7 @@ import argparse
 
 from jobintel.analytics.top_skills import top_skills
 from jobintel.db import SessionLocal, init_db
-from jobintel.etl.pipeline import run_etl_from_payloads
-from jobintel.etl.sources.remotive import fetch_remotive_jobs
+from jobintel.etl.pipeline import run_ingest
 
 
 def main() -> None:
@@ -14,21 +13,24 @@ def main() -> None:
     ap.add_argument("--category", default=None)
     ap.add_argument("--limit", type=int, default=200)
     ap.add_argument("--top", type=int, default=20)
+    ap.add_argument("--source", default="remotive", help="Source to ingest from")
     args = ap.parse_args()
 
     init_db()
 
-    # Fetch from Remotive (supports category arg not in registry interface)
-    payloads = fetch_remotive_jobs(search=args.search, category=args.category, limit=args.limit)
-
     with SessionLocal() as session:
-        # Run ETL pipeline on fetched payloads
-        result = run_etl_from_payloads(session, payloads)
+        # Run full ingest pipeline (creates IngestRun record)
+        result = run_ingest(
+            session,
+            source_name=args.source,
+            search=args.search or "",
+            limit=args.limit,
+        )
 
         rows = top_skills(session, limit=int(args.top))
 
     print(
-        f"fetched={len(payloads)} inserted_raw={result.inserted_raw} "
+        f"fetched={result.fetched} inserted_raw={result.inserted_raw} "
         f"inserted_jobs={result.inserted_jobs} inserted_skills={result.inserted_skills}"
     )
     print("skill\tcount")
