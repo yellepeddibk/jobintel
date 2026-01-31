@@ -219,3 +219,8 @@ __pycache__/
 
 # Local SQLite DB
 jobintel.db
+
+# Marketing assets (demos, videos)
+*.gif
+*.mp4
+demo/
