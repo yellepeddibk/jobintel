@@ -2,8 +2,8 @@ name: Ingest Jobs
 
 on:
   schedule:
-    # Run every 48 hours at midnight UTC to stay within Neon free tier transfer limits
-    - cron: '0 0 */2 * *'
+    # Run once per week at midnight UTC to stay within Neon free tier transfer limits
+    - cron: '0 0 * * 0'
   workflow_dispatch:
     # Allow manual trigger from GitHub Actions UI
 
