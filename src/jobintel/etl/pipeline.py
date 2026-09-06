@@ -65,8 +65,8 @@ def run_etl_from_payloads(
         if upsert_raw_job(session, payload, environment=env):
             inserted_raw += 1
 
-    inserted_jobs = transform_jobs(session)
-    inserted_skills = extract_skills_for_all_jobs(session)
+    inserted_jobs = transform_jobs(session, environment=env)
+    inserted_skills = extract_skills_for_all_jobs(session, environment=env)
 
     return EtlResult(
         inserted_raw=inserted_raw,
@@ -147,17 +147,21 @@ def run_ingest(
         raise
 
 
-def run_postprocess(session: Session) -> tuple[int, int]:
+def run_postprocess(session: Session, environment: str | None = None) -> tuple[int, int]:
     """Run transform and skills extraction only (no fetch/raw upsert).
 
     Useful for reprocessing existing raw_jobs data.
 
     Args:
         session: SQLAlchemy session (transform and skills functions commit internally)
+        environment: Environment to reprocess (uses settings.ENV if None). Exactly
+            one environment per call; to reprocess several, loop over them at the
+            call site so each is a stated decision.
 
     Returns:
         Tuple of (inserted_jobs, inserted_skills)
     """
-    inserted_jobs = transform_jobs(session)
-    inserted_skills = extract_skills_for_all_jobs(session)
+    env = environment or settings.ENV
+    inserted_jobs = transform_jobs(session, environment=env)
+    inserted_skills = extract_skills_for_all_jobs(session, environment=env)
     return inserted_jobs, inserted_skills

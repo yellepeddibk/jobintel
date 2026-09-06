@@ -98,8 +98,8 @@ def seed_and_transform(session, environment: str = "production") -> dict:
         Dict with counts: raw_inserted, jobs_transformed, skills_extracted
     """
     raw_inserted = seed_test_data(session, environment=environment)
-    jobs_transformed = transform_jobs(session)
-    skills_extracted = extract_skills_for_all_jobs(session)
+    jobs_transformed = transform_jobs(session, environment=environment)
+    skills_extracted = extract_skills_for_all_jobs(session, environment=environment)
 
     return {
         "raw_inserted": raw_inserted,

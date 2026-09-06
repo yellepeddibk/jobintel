@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, String, Text, func
+from sqlalchemy import (
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
@@ -31,13 +40,20 @@ class Job(Base):
     __tablename__ = "jobs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # Environment the raw row this job was normalized from was ingested under.
+    # No Python default and no server_default on purpose: every writer must state
+    # the environment, so a path that forgets fails loudly instead of silently
+    # being labelled production. The production database still carries a temporary
+    # DEFAULT 'production' from revision 7d2b1a4c9f30, which a later contract
+    # revision removes; nothing here may depend on it.
+    environment: Mapped[str] = mapped_column(String, nullable=False)
     title: Mapped[str] = mapped_column(String, nullable=False)
     company: Mapped[str | None] = mapped_column(String, nullable=True)
     location: Mapped[str | None] = mapped_column(String, nullable=True)
-    url: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    url: Mapped[str | None] = mapped_column(String, nullable=True)
     posted_at: Mapped[date | None] = mapped_column(Date, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    hash: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    hash: Mapped[str | None] = mapped_column(String, nullable=True)
 
     skills: Mapped[list[JobSkill]] = relationship(
         back_populates="job",
@@ -45,6 +61,11 @@ class Job(Base):
     )
 
     __table_args__ = (
+        # Normalized identity is scoped to one environment. The same posting may
+        # exist once per environment and can never collapse two environments into
+        # one row. No standalone index on environment: it leads these constraints.
+        UniqueConstraint("environment", "url", name="uq_jobs_environment_url"),
+        UniqueConstraint("environment", "hash", name="uq_jobs_environment_hash"),
         Index("idx_jobs_location", "location"),
         Index("idx_jobs_posted_at", "posted_at"),
     )

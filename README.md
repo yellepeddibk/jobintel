@@ -131,22 +131,22 @@ Each pipeline run is tracked in the `ingest_runs` table with:
 ## Data Model
 
 ```
-    +------------------+          +------------------+          +------------------+
-    |    raw_jobs      |          |      jobs        |          |   job_skills     |
-    +------------------+          +------------------+          +------------------+
-    | id (PK)          |          | id (PK)          |          | job_id (PK, FK)  |
-    | source           |    1:1   | title            |    1:N   | skill (PK)       |
-    | payload_json     |--------->| company          |<---------|                  |
-    | ingested_at      |  (url)   | location         |          +------------------+
-    | environment      |          | url (unique)     |
-    +------------------+          | posted_at        |
-                                  | description      |
-    +------------------+          | hash (unique)    |
-    |   ingest_runs    |          +------------------+
-    +------------------+
-    | id (PK)          |
-    | source           |
-    | search           |
+    +------------------+          +------------------------------+     +------------------+
+    |    raw_jobs      |          |            jobs              |     |   job_skills     |
+    +------------------+          +------------------------------+     +------------------+
+    | id (PK)          |          | id (PK)                      |     | job_id (PK, FK)  |
+    | source           |   1:1    | environment                  | 1:N | skill (PK)       |
+    | payload_json     |--------->| title                        |<----|                  |
+    | ingested_at      | (env +   | company                      |     +------------------+
+    | environment      |   url)   | location                     |
+    +------------------+          | url                          |     job_skills has no
+                                  | posted_at                    |     environment column:
+    +------------------+          | description                  |     it derives one
+    |   ingest_runs    |          | hash                         |     through job_id.
+    +------------------+          +------------------------------+
+    | id (PK)          |          | UNIQUE (environment, url)    |
+    | source           |          | UNIQUE (environment, hash)   |
+    | search           |          +------------------------------+
     | limit            |
     | environment      |
     | status           |
@@ -166,7 +166,7 @@ Each pipeline run is tracked in the `ingest_runs` table with:
 | Table | Purpose |
 |-------|---------|
 | `raw_jobs` | Immutable store of original job payloads from sources |
-| `jobs` | Normalized, deduplicated job postings |
+| `jobs` | Normalized job postings, deduplicated **within an environment** and carrying the environment they were ingested under |
 | `job_skills` | Many-to-many relationship between jobs and extracted skills |
 | `ingest_runs` | Audit log of all pipeline executions |
 
@@ -196,7 +196,7 @@ Each pipeline run is tracked in the `ingest_runs` table with:
 
 ### Data Quality
 - Content-hash based deduplication prevents duplicate ingestion
-- URL-based job deduplication ensures unique listings
+- URL and normalized-hash job identity is scoped per environment: unique listings within an environment, and development data can never merge into production
 - Validation warnings surfaced in ingest run logs
 - Idempotent pipeline operations safe to re-run
 

@@ -9,7 +9,7 @@ def test_top_skills_returns_counts(session):
     """top_skills should return skill names with positive counts."""
     seed_and_transform(session, environment="test")
 
-    rows = top_skills(session, limit=50)
+    rows = top_skills(session, limit=50, environment="test")
     skills = {s for (s, _) in rows}
 
     # Our test data has Python in multiple jobs

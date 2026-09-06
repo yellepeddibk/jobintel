@@ -129,8 +129,8 @@ class TestGetSkillTrendsGranularity:
         ]
 
         seed_jobs_with_times(session, times, environment="test")
-        transform_jobs(session)
-        extract_skills_for_all_jobs(session)
+        transform_jobs(session, environment="test")
+        extract_skills_for_all_jobs(session, environment="test")
 
         # Get trends with 6h granularity
         trends = get_skill_trends(
@@ -152,8 +152,8 @@ class TestGetSkillTrendsGranularity:
         times = [base_date.replace(hour=1), base_date.replace(hour=13)]
 
         seed_jobs_with_times(session, times, environment="test")
-        transform_jobs(session)
-        extract_skills_for_all_jobs(session)
+        transform_jobs(session, environment="test")
+        extract_skills_for_all_jobs(session, environment="test")
 
         # Request with short date range (auto should pick 6h)
         trends = get_skill_trends(
@@ -179,8 +179,8 @@ class TestGetSkillTrendsGranularity:
         times = [base_date.replace(hour=1), base_date.replace(hour=13)]
 
         seed_jobs_with_times(session, times, environment="test")
-        transform_jobs(session)
-        extract_skills_for_all_jobs(session)
+        transform_jobs(session, environment="test")
+        extract_skills_for_all_jobs(session, environment="test")
 
         # Request without date range (should default to 6h)
         trends = get_skill_trends(

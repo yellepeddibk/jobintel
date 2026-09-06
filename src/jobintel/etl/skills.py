@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from jobintel.core.config import settings
 from jobintel.models import Job, JobSkill
 
 _SKILL_PATTERNS: dict[str, str] = {
@@ -52,6 +53,16 @@ def extract_skills_for_jobs(session: Session, jobs: Iterable[Job]) -> int:
     return inserted
 
 
-def extract_skills_for_all_jobs(session: Session) -> int:
-    jobs = session.execute(select(Job)).scalars().all()
+def extract_skills_for_all_jobs(session: Session, environment: str | None = None) -> int:
+    """Extract skills for every job in one environment.
+
+    JobSkill carries no environment column: it derives one through its job_id
+    foreign key, and each job now has exactly one. Scoping here is therefore not
+    needed for correctness, but it keeps a run from doing another environment's
+    work and keeps IngestRun.inserted_skills describing the run that produced it.
+
+    None resolves to settings.ENV, matching the rest of the pipeline.
+    """
+    env = environment or settings.ENV
+    jobs = session.execute(select(Job).where(Job.environment == env)).scalars().all()
     return extract_skills_for_jobs(session, jobs)

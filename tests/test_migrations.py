@@ -370,14 +370,20 @@ def test_upgrade_downgrade_upgrade_round_trip(migration_db):
         ).scalar_one() == 3
 
 
-def test_unmodified_application_still_works_against_the_migrated_schema(migration_db):
-    """The claim the whole expand step rests on.
+def test_application_writes_environment_rather_than_inheriting_the_server_default(
+    migration_db,
+):
+    """The use step's half of the expand/use/contract contract.
 
-    The application code in this commit does not know `jobs.environment` exists. It
-    must keep ingesting, transforming, extracting skills and answering analytics
-    queries against the migrated database, with the server default supplying the
-    value its INSERTs omit. If this ever fails, the migration cannot safely reach
-    production ahead of the application.
+    The migrated database still carries the temporary DEFAULT 'production' that
+    revision 7d2b1a4c9f30 added for the pre-deploy application, and PR C has not
+    removed it yet. The current ORM declares no default of its own, so this test
+    pins that the application supplies the value itself and does not quietly lean
+    on the column default that is about to disappear.
+
+    Transforming a 'development' environment against this production-shaped
+    database is the sharp version of that question: if the value came from the
+    server default the rows would read 'production'.
     """
     from fixtures import TEST_JOB_PAYLOADS
     from sqlalchemy.orm import sessionmaker
@@ -395,31 +401,42 @@ def test_unmodified_application_still_works_against_the_migrated_schema(migratio
         conn.execute(text("DELETE FROM jobs"))
         conn.commit()
 
+    # The column default really is still there, so the test is not vacuous.
+    default = next(
+        c["default"] for c in inspect(engine).get_columns("jobs") if c["name"] == "environment"
+    )
+    assert "production" in str(default)
+
     session = sessionmaker(bind=engine)()
     try:
         inserted_raw = sum(
-            upsert_raw_job(session, payload, environment="production")
+            upsert_raw_job(session, payload, environment="development")
             for payload in TEST_JOB_PAYLOADS
         )
         session.commit()
-
         assert inserted_raw == len(TEST_JOB_PAYLOADS)
-        assert transform_jobs(session) == len(TEST_JOB_PAYLOADS)
-        assert extract_skills_for_all_jobs(session) > 0
 
-        # The Job model has no environment attribute, so the INSERT omitted it.
+        assert transform_jobs(session, environment="development") == len(TEST_JOB_PAYLOADS)
+        assert extract_skills_for_all_jobs(session, environment="development") > 0
+
         with engine.connect() as conn:
             environments = conn.execute(
                 text("SELECT DISTINCT environment FROM jobs")
             ).scalars().all()
-        assert environments == ["production"]
+        assert environments == ["development"], (
+            "jobs.environment came from the server default, not the application"
+        )
 
-        assert get_kpis(session, environment="production")["total_jobs"] == len(
+        # And the production view of that same database stays empty.
+        assert get_kpis(session, environment="production")["total_jobs"] == 0
+        assert get_top_skills(session, environment="production") == []
+
+        assert get_kpis(session, environment="development")["total_jobs"] == len(
             TEST_JOB_PAYLOADS
         )
-        assert get_top_skills(session, environment="production")
+        assert get_top_skills(session, environment="development")
 
-        # Global Python-side deduplication still makes a re-run a no-op.
-        assert transform_jobs(session) == 0
+        # Re-running one environment stays idempotent.
+        assert transform_jobs(session, environment="development") == 0
     finally:
         session.close()
