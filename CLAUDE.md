@@ -115,9 +115,15 @@ Still true: `jobs` is not production-only. A single database can hold rows from 
 environments. The guarantee is that they stay distinguishable and cannot merge, not that
 they are physically separated.
 
-The production database still carries a temporary `DEFAULT 'production'` on
-`jobs.environment` from revision `7d2b1a4c9f30`, which the contract migration removes. The
-ORM deliberately declares no default, so nothing may depend on it.
+**`Job.environment` must always be supplied explicitly.** There is no fallback anywhere:
+no Python default, no ORM `server_default`, and since revision `c4e81f6a2b57` no database
+default either. A write that omits it fails on the `NOT NULL` constraint rather than being
+silently labelled production, which is the point. Do not reintroduce a default on this
+column in any of those three places to make a write path convenient; fix the write path.
+
+The temporary `DEFAULT 'production'` that revision `7d2b1a4c9f30` added existed only to
+keep the previously deployed application inserting during the window between migrating the
+database and deploying code that knew about the column. That rollout is complete.
 
 ## Database
 
