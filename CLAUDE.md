@@ -52,9 +52,10 @@ The content hash is what makes raw ingestion idempotent. Its input key set and i
 serialization are persistent data-format behavior, not implementation detail: changing either
 invalidates every stored hash and causes mass re-insertion of rows already ingested. The same
 care applies to the dedup seeding in `transform_jobs`, which makes re-runs idempotent across
-runs and not only within one. That seeding is scoped to a single environment: keep it that
-way, since widening it silently lets one environment suppress another's rows. Sources do not
-all hash identically today; do not assume so.
+runs and not only within one. Both that seeding and the raw existence check are scoped to a
+single environment: keep them that way, since widening either silently lets one environment
+suppress another's rows, with no error to signal the loss. Sources do not all hash identically
+today; do not assume so.
 
 Known defect, tracked as the next task and deliberately not fixed yet: `_safe_date()` uses
 `date.fromisoformat`, which rejects the datetime strings every adapter actually emits, so
@@ -84,6 +85,8 @@ RawJob.environment -> transform_jobs() for that one environment -> Job.environme
   call, `None` resolving to `settings.ENV`. There is no all-environments mode; loop at the
   call site instead. It reads only raw rows for that environment, writes that environment
   onto every job it creates, and scopes deduplication to it.
+- `upsert_raw_job()` deduplicates within one environment, so the same posting can be
+  ingested once per environment while a repeat within one is still suppressed.
 - Analytics filter `Job.environment` directly. Nothing reconstructs a job's environment by
   matching its URL back to `raw_jobs`.
 
