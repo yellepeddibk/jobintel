@@ -16,7 +16,7 @@ def test_transform_dedupes_by_url(session):
     upsert_raw_job(session, TEST_JOB_DUPLICATE, environment="test")
     session.commit()
 
-    inserted = transform_jobs(session)
+    inserted = transform_jobs(session, environment="test")
 
     # Should only create 4 unique jobs (duplicate URL skipped)
     assert inserted == 4

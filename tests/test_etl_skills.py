@@ -10,10 +10,10 @@ from jobintel.models import JobSkill
 def test_extract_skills_is_idempotent(session):
     """Running skills extraction twice should not duplicate skills."""
     seed_test_data(session, environment="test")
-    transform_jobs(session)
+    transform_jobs(session, environment="test")
 
-    first = extract_skills_for_all_jobs(session)
-    second = extract_skills_for_all_jobs(session)
+    first = extract_skills_for_all_jobs(session, environment="test")
+    second = extract_skills_for_all_jobs(session, environment="test")
 
     assert first > 0, "First run should extract some skills"
     assert second == 0, "Second run should extract zero (already processed)"

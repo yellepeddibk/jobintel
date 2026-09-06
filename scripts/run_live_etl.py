@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 
 from jobintel.analytics.top_skills import top_skills
+from jobintel.core.config import settings
 from jobintel.db import SessionLocal, init_db
 from jobintel.etl.pipeline import run_ingest
 
@@ -48,7 +49,7 @@ def main() -> None:
 
         # Show top skills across all sources
         print(f"\n📊 Top {args.top} skills:")
-        rows = top_skills(session, limit=int(args.top))
+        rows = top_skills(session, limit=int(args.top), environment=settings.ENV)
         print("skill\tcount")
         for skill, n in rows:
             print(f"{skill}\t{n}")

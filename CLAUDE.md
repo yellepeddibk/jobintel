@@ -16,7 +16,7 @@ This file holds durable, non-obvious requirements only. Read the sources below f
 | Schema | `src/jobintel/models.py`, `alembic/versions/` |
 | Source adapter contract and registry | `src/jobintel/etl/sources/base.py`, `src/jobintel/etl/sources/registry.py` |
 | Hashing and idempotency | `src/jobintel/etl/raw.py`, `src/jobintel/etl/transform.py` |
-| Environment filtering | `src/jobintel/analytics/queries.py` |
+| Environment separation | `src/jobintel/models.py`, `src/jobintel/etl/transform.py`, `src/jobintel/analytics/queries.py` |
 
 `README.md` can drift. Where it disagrees with an implementation or configuration file, the
 code wins. `db/schema.sql` is stale reference material and is not the source of truth.
@@ -52,7 +52,14 @@ The content hash is what makes raw ingestion idempotent. Its input key set and i
 serialization are persistent data-format behavior, not implementation detail: changing either
 invalidates every stored hash and causes mass re-insertion of rows already ingested. The same
 care applies to the dedup seeding in `transform_jobs`, which makes re-runs idempotent across
-runs and not only within one. Sources do not all hash identically today; do not assume so.
+runs and not only within one. That seeding is scoped to a single environment: keep it that
+way, since widening it silently lets one environment suppress another's rows. Sources do not
+all hash identically today; do not assume so.
+
+Known defect, tracked as the next task and deliberately not fixed yet: `_safe_date()` uses
+`date.fromisoformat`, which rejects the datetime strings every adapter actually emits, so
+`posted_at` normalizes to `None` and `job_hash` collapses to title/company/location. Fixing
+it changes every stored `job_hash`.
 
 ## Raw payloads
 
@@ -63,19 +70,51 @@ reprocess by re-running transform, not by rewriting stored raw rows.
 
 ## Environment separation
 
-**Environment separation happens at query time, not end to end.** This is the easiest
-invariant here to misread:
+**Environment separation is end to end.** The chain is:
 
-- `raw_jobs` and `ingest_runs` carry an `environment` column.
-- `jobs` and `job_skills` do **not**.
-- `transform_jobs()` processes all raw rows regardless of tag, so `jobs` is mixed-environment
-  by construction.
-- Only the dashboard data-query functions in `analytics/queries.py` separate environments,
-  through an inner join to `raw_jobs` filtered on `environment`.
+```
+RawJob.environment -> transform_jobs() for that one environment -> Job.environment
+                   -> analytics filtering on Job.environment
+```
 
-Do not treat `jobs` as production-only or assume a `jobs` row came from a production ingest, do
-not weaken or drop that join, and add environment awareness below the analytics layer rather
-than assuming it.
+- `raw_jobs`, `ingest_runs` and `jobs` all carry an `environment` column.
+- `job_skills` does **not**, and must not gain one: it derives environment through its
+  `job_id` foreign key, and a job has exactly one.
+- `transform_jobs(session, environment=None)` processes **exactly one** environment per
+  call, `None` resolving to `settings.ENV`. There is no all-environments mode; loop at the
+  call site instead. It reads only raw rows for that environment, writes that environment
+  onto every job it creates, and scopes deduplication to it.
+- Analytics filter `Job.environment` directly. Nothing reconstructs a job's environment by
+  matching its URL back to `raw_jobs`.
+
+Two mechanisms enforce this, and they fail differently:
+
+- **The database** enforces identity through `UNIQUE(environment, url)` and
+  `UNIQUE(environment, hash)`. Two environments can never collapse into one `jobs` row.
+- **Code** enforces that `Job.environment` matches the raw row it came from. No constraint
+  can express that, because it spans two tables, so `tests/test_environment_isolation.py`
+  holds it instead. Do not weaken those tests.
+
+**Where a query still needs raw metadata** (`source`, `ingested_at`), the join must match
+environment as well as URL. A URL-only join is now a defect, because the same URL may
+legitimately exist in several environments. Use `authoritative_raw_jobs()` and
+`job_raw_onclause()` from `analytics/queries.py` rather than writing a join by hand.
+
+**A job's raw metadata is resolved by rule, not by a foreign key.** There is no
+`raw_job_id`; do not claim database-enforced provenance. `source` and `ingested_at` come
+from the lowest-id `raw_jobs` row sharing the job's environment and URL, which is the row
+`transform_jobs()` normalized it from, since it reads raw rows in `id` order. Those two
+must stay in agreement. Without this rule a job with several raw versions fans out into
+several result rows, and `.distinct()` does not fix it because the differing column is the
+metadata being selected.
+
+Still true: `jobs` is not production-only. A single database can hold rows from several
+environments. The guarantee is that they stay distinguishable and cannot merge, not that
+they are physically separated.
+
+The production database still carries a temporary `DEFAULT 'production'` on
+`jobs.environment` from revision `7d2b1a4c9f30`, which the contract migration removes. The
+ORM deliberately declares no default, so nothing may depend on it.
 
 ## Database
 

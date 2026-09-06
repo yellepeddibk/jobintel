@@ -6,10 +6,12 @@ import streamlit as st
 from sqlalchemy import func, or_, select
 
 from jobintel.analytics.queries import (
+    authoritative_raw_jobs,
     get_kpis,
     get_skill_trends,
     get_top_skills,
     get_top_skills_by_source,
+    job_raw_onclause,
 )
 from jobintel.core.config import settings
 from jobintel.db import SessionLocal, init_db
@@ -89,13 +91,11 @@ def get_skill_choices(environment: str, limit: int = 200) -> list[str]:
     """Get list of skills from specified environment."""
     try:
         with SessionLocal() as s:
-            url_expr = RawJob.payload_json["url"].as_string()
-            # Only include skills from jobs in specified environment
+            # Environment comes from the job itself; no raw join needed.
             rows = s.execute(
                 select(JobSkill.skill)
                 .join(Job, Job.id == JobSkill.job_id)
-                .join(RawJob, url_expr == Job.url)
-                .where(RawJob.environment == environment)
+                .where(Job.environment == environment)
                 .distinct()
                 .order_by(JobSkill.skill)
                 .limit(limit)
@@ -119,18 +119,20 @@ def get_latest_jobs(
     """Get latest jobs from specified environment."""
     try:
         with SessionLocal() as s:
-            url_expr = RawJob.payload_json["url"].as_string()
+            # Environment gate is Job.environment. Source and ingested_at come from
+            # the job's authoritative raw row (lowest id for this environment and
+            # url), which is the row transform normalized it from. Joining raw rows
+            # by URL alone would show a job once per raw version, and .distinct()
+            # does not collapse those because the source column is what differs.
+            raw = authoritative_raw_jobs()
+            q = s.query(Job, raw.c.source.label("source")).join(raw, job_raw_onclause(raw))
 
-            # Inner join RawJob - required for environment/source filtering
-            q = s.query(Job, RawJob.source.label("source")).join(RawJob, url_expr == Job.url)
-
-            # Filter by specified environment
-            q = q.filter(RawJob.environment == environment)
+            q = q.filter(Job.environment == environment)
 
             # Filter by date (posted_at or ingested_at as fallback)
             if days_back:
                 cutoff_date = date.today() - timedelta(days=days_back)
-                date_expr = func.coalesce(Job.posted_at, RawJob.ingested_at)
+                date_expr = func.coalesce(Job.posted_at, raw.c.ingested_at)
                 q = q.filter(date_expr >= cutoff_date)
 
             # Filter by location with smart US detection
@@ -182,7 +184,7 @@ def get_latest_jobs(
                 )
 
             if sources:
-                q = q.filter(RawJob.source.in_(sources))
+                q = q.filter(raw.c.source.in_(sources))
 
             if skills:
                 q = (

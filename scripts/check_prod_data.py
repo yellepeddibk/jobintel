@@ -24,13 +24,13 @@ def _add_src_to_path() -> None:
     sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 
-def check_environment_distribution() -> tuple[dict[str, int], dict[str, int]]:
-    """Get counts of records by environment for RawJob and IngestRun."""
+def check_environment_distribution() -> tuple[dict[str, int], dict[str, int], dict[str, int]]:
+    """Get counts of records by environment for RawJob, IngestRun and Job."""
     from sqlalchemy import func, select
 
     _add_src_to_path()
     from jobintel.db import SessionLocal
-    from jobintel.models import IngestRun, RawJob
+    from jobintel.models import IngestRun, Job, RawJob
 
     with SessionLocal() as session:
         # RawJob distribution
@@ -43,7 +43,12 @@ def check_environment_distribution() -> tuple[dict[str, int], dict[str, int]]:
         )
         run_counts = dict(session.execute(run_query).fetchall())
 
-    return raw_counts, run_counts
+        # Job distribution. Normalized jobs carry their own environment now, so
+        # leaked non-production data is visible here rather than only in raw_jobs.
+        job_query = select(Job.environment, func.count(Job.id)).group_by(Job.environment)
+        job_counts = dict(session.execute(job_query).fetchall())
+
+    return raw_counts, run_counts, job_counts
 
 
 def main() -> int:
@@ -55,7 +60,7 @@ def main() -> int:
     print()
 
     try:
-        raw_counts, run_counts = check_environment_distribution()
+        raw_counts, run_counts, job_counts = check_environment_distribution()
     except Exception as e:
         print(f"Error connecting to database: {e}")
         return 1
@@ -77,12 +82,22 @@ def main() -> int:
     else:
         print("  (none)")
 
+    print()
+    print("Job records by environment:")
+    if job_counts:
+        for env, count in sorted(job_counts.items()):
+            marker = " [!]" if env in ("test", "development") else ""
+            print(f"  {env}: {count}{marker}")
+    else:
+        print("  (none)")
+
     # Check for problems
     non_prod_raw = sum(count for env, count in raw_counts.items() if env != "production")
     non_prod_runs = sum(count for env, count in run_counts.items() if env != "production")
+    non_prod_jobs = sum(count for env, count in job_counts.items() if env != "production")
 
     print()
-    if non_prod_raw > 0 or non_prod_runs > 0:
+    if non_prod_raw > 0 or non_prod_runs > 0 or non_prod_jobs > 0:
         if settings.is_production:
             print("ERROR: Non-production data found in production database!")
             print("This is a hard failure in production mode.")

@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from jobintel.core.config import settings
 from jobintel.models import Job, RawJob
 
 
@@ -38,15 +39,45 @@ def job_hash(
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
-def transform_jobs(session: Session) -> int:
-    # Seed seen sets from existing DB rows for idempotency across runs.
-    existing = session.execute(select(Job.url, Job.hash)).all()
+def transform_jobs(session: Session, environment: str | None = None) -> int:
+    """Normalize raw jobs into `jobs` for exactly one environment.
+
+    Args:
+        session: SQLAlchemy session.
+        environment: Environment to process. None resolves to settings.ENV, which
+            matches upsert_raw_job and the rest of the pipeline. There is
+            deliberately no all-environments mode: a caller that wants several
+            loops over them explicitly, so the environment a row is written with
+            is always a stated decision rather than a side effect.
+
+    Only raw rows tagged with the resolved environment are read, and every job
+    created is written with that same environment. Deduplication by URL and by
+    normalized hash is scoped to it too, so the same posting may exist once per
+    environment while a repeat within one environment is still suppressed.
+    """
+    env = environment or settings.ENV
+
+    # Seed seen sets from existing rows in THIS environment, for idempotency
+    # across runs. Scoping matters as much as the raw filter below: seeding
+    # globally would let one environment's jobs suppress another's.
+    existing = session.execute(
+        select(Job.url, Job.hash).where(Job.environment == env)
+    ).all()
     seen_urls = {u for (u, _) in existing if u}
     seen_hashes = {h for (_, h) in existing if h}
 
     inserted = 0
 
-    raw_rows = session.execute(select(RawJob)).scalars().all()
+    # Ordered by id so which raw row wins is deterministic rather than dependent
+    # on the query plan. Analytics resolves a job's raw metadata by the same rule
+    # (lowest id for the environment and url), so content and metadata agree.
+    raw_rows = (
+        session.execute(
+            select(RawJob).where(RawJob.environment == env).order_by(RawJob.id)
+        )
+        .scalars()
+        .all()
+    )
     for r in raw_rows:
         p = r.payload_json or {}
 
@@ -68,6 +99,7 @@ def transform_jobs(session: Session) -> int:
 
         session.add(
             Job(
+                environment=env,
                 title=title,
                 company=company,
                 location=location,

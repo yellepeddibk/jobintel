@@ -52,8 +52,11 @@ def test_queries_exclude_non_production_data(session):
     session.commit()
 
     # Transform to jobs table
-    transform_jobs(session)
-    extract_skills_for_all_jobs(session)
+    # Transform each environment separately: one environment per call.
+    transform_jobs(session, environment="production")
+    transform_jobs(session, environment="test")
+    extract_skills_for_all_jobs(session, environment="production")
+    extract_skills_for_all_jobs(session, environment="test")
 
     # Get KPIs - should only count production job
     kpis = get_kpis(session, environment=PRODUCTION_ENV)
