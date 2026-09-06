@@ -10,12 +10,19 @@ it was when the migration was written. Building it from the ORM would silently t
 future model changes, and the test would stop exercising the migration at exactly the
 point the model moves ahead of it.
 
-That model divergence is expected here. Revision 7d2b1a4c9f30 is the expand step of an
-expand/use/contract rollout: the database gains `jobs.environment` and a temporary
-`DEFAULT 'production'` so the currently deployed application, which does not set the
-column, keeps inserting successfully. The ORM model deliberately does not declare
-either yet, and a later contract revision removes the server default once the new
-application code is deployed.
+Two revisions are covered, the two halves of an expand/use/contract rollout:
+
+- `7d2b1a4c9f30` (expand) adds `jobs.environment` with a temporary
+  `DEFAULT 'production'`, so the application deployed at the time, which did not set
+  the column, kept inserting successfully.
+- `c4e81f6a2b57` (contract) removes that default now that the deployed application
+  sets `environment` explicitly. After it, a write that omits an environment fails
+  instead of being silently labelled production.
+
+Tests assert against whichever of those they are about. Ones describing behavior
+specific to the expand revision target `EXPAND_REVISION` by name, because "head" has
+moved past it; ones describing the current schema contract stay on "head", which is
+what proves the contract step preserved NOT NULL, both composite uniques and every row.
 """
 
 from __future__ import annotations
@@ -32,6 +39,15 @@ from alembic import command
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 PREVIOUS_HEAD = "fbbd657b4749"
+
+# The expand revision, which added jobs.environment together with a temporary
+# database-only DEFAULT 'production'. Tests that assert behavior specific to that
+# revision target it by name rather than "head", so they keep testing what they were
+# written to test as later revisions land. The contract revision c4e81f6a2b57 removes
+# that default, so "head" no longer has one; tests that assert the current schema
+# contract stay on "head" deliberately, which is what proves the contract step
+# preserved NOT NULL, both composite uniques, and every row.
+EXPAND_REVISION = "7d2b1a4c9f30"
 
 # The schema as of revision fbbd657b4749: raw_jobs and ingest_runs carry an
 # environment column, jobs and job_skills do not, and jobs has global uniqueness on
@@ -165,15 +181,16 @@ def test_upgrade_adds_environment_column_as_not_null(migration_db):
     assert columns["environment"]["nullable"] is False
 
 
-def test_upgrade_leaves_a_temporary_server_default_behind(migration_db):
-    """The default is what keeps the pre-deploy application inserting successfully.
+def test_expand_revision_leaves_a_temporary_server_default_behind(migration_db):
+    """The default is what kept the pre-deploy application inserting successfully.
 
-    It is intentionally not declared on the ORM model, and a later contract revision
-    removes it. Asserted here so that removal is a deliberate, visible change.
+    Targets the expand revision by name, not "head": the contract revision removes
+    this default, and asserting it at "head" would test the opposite of the truth
+    once that landed.
     """
     engine, cfg = migration_db
 
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, EXPAND_REVISION)
 
     columns = {c["name"]: c for c in inspect(engine).get_columns("jobs")}
     assert "production" in str(columns["environment"]["default"])
@@ -327,10 +344,16 @@ def test_downgrade_restores_global_uniqueness_and_drops_the_column(migration_db)
 
 
 def test_downgrade_refuses_rather_than_discard_cross_environment_rows(migration_db):
-    """Global uniqueness cannot be restored once two environments share a URL."""
+    """Global uniqueness cannot be restored once two environments share a URL.
+
+    The refusal belongs to the expand revision's downgrade, so this starts there.
+    Downgrading from "head" would run the contract revision's downgrade first and
+    leave the version stamped between the two, which says nothing extra about the
+    guard being tested.
+    """
     engine, cfg = migration_db
 
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, EXPAND_REVISION)
     with engine.begin() as conn:
         conn.execute(
             text(
@@ -375,15 +398,16 @@ def test_application_writes_environment_rather_than_inheriting_the_server_defaul
 ):
     """The use step's half of the expand/use/contract contract.
 
-    The migrated database still carries the temporary DEFAULT 'production' that
-    revision 7d2b1a4c9f30 added for the pre-deploy application, and PR C has not
-    removed it yet. The current ORM declares no default of its own, so this test
-    pins that the application supplies the value itself and does not quietly lean
-    on the column default that is about to disappear.
+    Runs at the expand revision on purpose, because that is where the temporary
+    DEFAULT 'production' still exists and can therefore mask a missing write. The
+    ORM declares no default of its own, so this pins that the application supplies
+    the value itself rather than leaning on the column default.
 
     Transforming a 'development' environment against this production-shaped
     database is the sharp version of that question: if the value came from the
-    server default the rows would read 'production'.
+    server default the rows would read 'production'. Once the contract revision
+    removes the default there is nothing left to lean on, which is what
+    test_insert_without_environment_fails_after_contract_revision covers instead.
     """
     from fixtures import TEST_JOB_PAYLOADS
     from sqlalchemy.orm import sessionmaker
@@ -394,7 +418,7 @@ def test_application_writes_environment_rather_than_inheriting_the_server_defaul
     from jobintel.etl.transform import transform_jobs
 
     engine, cfg = migration_db
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, EXPAND_REVISION)
 
     with engine.connect() as conn:
         conn.execute(text("DELETE FROM job_skills"))
@@ -440,3 +464,196 @@ def test_application_writes_environment_rather_than_inheriting_the_server_defaul
         assert transform_jobs(session, environment="development") == 0
     finally:
         session.close()
+
+
+# --------------------------------------------------------------------------
+# Contract revision c4e81f6a2b57: the temporary server default is removed.
+# --------------------------------------------------------------------------
+
+
+def _environment_default(engine):
+    column = next(
+        c for c in inspect(engine).get_columns("jobs") if c["name"] == "environment"
+    )
+    return column["default"]
+
+
+def test_contract_revision_removes_the_server_default(migration_db):
+    engine, cfg = migration_db
+
+    command.upgrade(cfg, EXPAND_REVISION)
+    assert "production" in str(_environment_default(engine)), "expand default missing"
+
+    command.upgrade(cfg, "head")
+    assert _environment_default(engine) is None
+
+
+def test_contract_revision_keeps_environment_not_null(migration_db):
+    engine, cfg = migration_db
+
+    command.upgrade(cfg, "head")
+
+    column = next(
+        c for c in inspect(engine).get_columns("jobs") if c["name"] == "environment"
+    )
+    assert column["nullable"] is False
+
+
+def test_contract_revision_keeps_both_composite_unique_constraints(migration_db):
+    engine, cfg = migration_db
+
+    command.upgrade(cfg, "head")
+
+    after = _unique_constraints(engine)
+    assert after[("environment", "url")] == "uq_jobs_environment_url"
+    assert after[("environment", "hash")] == "uq_jobs_environment_hash"
+    assert ("url",) not in after
+    assert ("hash",) not in after
+
+
+def test_contract_revision_preserves_rows_indexes_and_child_table(migration_db):
+    """Every column value must survive, not just the ones the revision reasons about.
+
+    On SQLite the contract revision rebuilds the table: it copies every row into a new
+    one, drops the original and renames. A column omitted from the rebuild definition
+    would be lost silently, so the comparison covers all nine columns rather than a
+    representative few.
+
+    Columns are listed explicitly rather than using SELECT *, because the rebuild also
+    reorders them (the contract revision's table definition places environment second,
+    the expand revision's placed it last). SELECT * would compare tuples in two
+    different column orders and prove nothing.
+    """
+    all_columns = (
+        "id, environment, title, company, location, url, posted_at, description, hash"
+    )
+    engine, cfg = migration_db
+
+    command.upgrade(cfg, EXPAND_REVISION)
+    with engine.connect() as conn:
+        before = conn.execute(text(f"SELECT {all_columns} FROM jobs ORDER BY id")).all()
+        before_skills = conn.execute(
+            text("SELECT job_id, skill FROM job_skills ORDER BY job_id, skill")
+        ).all()
+    assert before, "fixture seeded no rows, so this test would be vacuous"
+
+    command.upgrade(cfg, "head")
+
+    insp = inspect(engine)
+    assert {idx["name"] for idx in insp.get_indexes("jobs")} >= {
+        "idx_jobs_location",
+        "idx_jobs_posted_at",
+    }
+    assert any(fk["referred_table"] == "jobs" for fk in insp.get_foreign_keys("job_skills"))
+
+    with engine.connect() as conn:
+        after = conn.execute(text(f"SELECT {all_columns} FROM jobs ORDER BY id")).all()
+        after_skills = conn.execute(
+            text("SELECT job_id, skill FROM job_skills ORDER BY job_id, skill")
+        ).all()
+    assert after == before
+    assert after_skills == before_skills
+
+
+def test_insert_without_environment_fails_after_contract_revision(migration_db):
+    """The whole point: a missing environment must raise, not become production."""
+    engine, cfg = migration_db
+
+    command.upgrade(cfg, "head")
+
+    with pytest.raises(IntegrityError), engine.begin() as conn:
+        conn.execute(text("INSERT INTO jobs (title, url, hash) VALUES ('No env', 'u', 'h')"))
+
+    with engine.connect() as conn:
+        leaked = conn.execute(text("SELECT count(*) FROM jobs WHERE title = 'No env'")).scalar_one()
+    assert leaked == 0
+
+
+def test_application_writes_still_succeed_after_contract_revision(migration_db):
+    """The application supplies environment explicitly, so nothing depends on the default."""
+    from fixtures import TEST_JOB_PAYLOADS
+    from sqlalchemy.orm import sessionmaker
+
+    from jobintel.etl.raw import upsert_raw_job
+    from jobintel.etl.skills import extract_skills_for_all_jobs
+    from jobintel.etl.transform import transform_jobs
+
+    engine, cfg = migration_db
+    command.upgrade(cfg, "head")
+
+    with engine.connect() as conn:
+        conn.execute(text("DELETE FROM job_skills"))
+        conn.execute(text("DELETE FROM jobs"))
+        conn.commit()
+
+    session = sessionmaker(bind=engine)()
+    try:
+        for payload in TEST_JOB_PAYLOADS:
+            upsert_raw_job(session, payload, environment="development")
+        session.commit()
+
+        assert transform_jobs(session, environment="development") == len(TEST_JOB_PAYLOADS)
+        assert extract_skills_for_all_jobs(session, environment="development") > 0
+
+        with engine.connect() as conn:
+            environments = conn.execute(
+                text("SELECT DISTINCT environment FROM jobs")
+            ).scalars().all()
+        assert environments == ["development"]
+    finally:
+        session.close()
+
+
+def test_contract_downgrade_restores_the_server_default(migration_db):
+    engine, cfg = migration_db
+
+    command.upgrade(cfg, "head")
+    assert _environment_default(engine) is None
+
+    command.downgrade(cfg, EXPAND_REVISION)
+
+    assert "production" in str(_environment_default(engine))
+    column = next(
+        c for c in inspect(engine).get_columns("jobs") if c["name"] == "environment"
+    )
+    assert column["nullable"] is False
+    after = _unique_constraints(engine)
+    assert after[("environment", "url")] == "uq_jobs_environment_url"
+    assert after[("environment", "hash")] == "uq_jobs_environment_hash"
+
+
+def test_contract_upgrade_downgrade_upgrade_round_trip(migration_db):
+    engine, cfg = migration_db
+
+    command.upgrade(cfg, "head")
+    with engine.connect() as conn:
+        rows = conn.execute(text("SELECT id, environment, title FROM jobs ORDER BY id")).all()
+
+    command.downgrade(cfg, EXPAND_REVISION)
+    command.upgrade(cfg, "head")
+
+    assert _environment_default(engine) is None
+    column = next(
+        c for c in inspect(engine).get_columns("jobs") if c["name"] == "environment"
+    )
+    assert column["nullable"] is False
+    after = _unique_constraints(engine)
+    assert after[("environment", "url")] == "uq_jobs_environment_url"
+    assert after[("environment", "hash")] == "uq_jobs_environment_hash"
+
+    with engine.connect() as conn:
+        after = conn.execute(text("SELECT id, environment, title FROM jobs ORDER BY id")).all()
+    assert after == rows
+
+
+def test_contract_upgrade_is_rerunnable(migration_db):
+    """Re-running the contract revision against a schema that already lacks the default."""
+    engine, cfg = migration_db
+
+    command.upgrade(cfg, "head")
+    command.stamp(cfg, EXPAND_REVISION, purge=True)
+    command.upgrade(cfg, "head")
+
+    assert _environment_default(engine) is None
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM jobs")).scalar_one() == 3
