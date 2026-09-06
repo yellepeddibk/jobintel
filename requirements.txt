@@ -9,4 +9,6 @@ streamlit>=1.30
 psycopg[binary]>=3.1
 pandas
 plotly
-.
+# Keep JobIntel editable so runtime imports resolve to the current checkout
+# instead of a copied package snapshot that can drift from it.
+-e .
