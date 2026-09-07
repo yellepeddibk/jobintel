@@ -23,6 +23,16 @@ _SKILL_PATTERNS: dict[str, str] = {
 }
 
 
+def known_skills() -> frozenset[str]:
+    """The canonical skill names this extractor can produce.
+
+    Derived from _SKILL_PATTERNS rather than restated, so a caller validating
+    requested skills cannot drift from what extraction actually emits. Callers
+    outside this module should use this instead of hardcoding the vocabulary.
+    """
+    return frozenset(_SKILL_PATTERNS)
+
+
 def extract_skills(text: str | None) -> set[str]:
     if not text:
         return set()
