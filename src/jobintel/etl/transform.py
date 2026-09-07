@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -12,14 +12,58 @@ from jobintel.models import Job, RawJob
 
 
 def _safe_date(v: Any) -> date | None:
-    if not v:
+    """Normalize whatever a source put in `posted_at` to a date, or None.
+
+    Every adapter emits a datetime rather than a bare date: arbeitnow an
+    isoformat() of a Unix timestamp, remotive the upstream publication_date, and
+    remoteok either an ISO datetime or a raw epoch. `date.fromisoformat` rejects
+    all of those, so this previously returned None for effectively every real
+    posting, leaving `posted_at` NULL and collapsing the date component of
+    `job_hash` to an empty string.
+
+    Accepted, in this order: date and datetime objects, Unix epoch numbers,
+    bare ISO dates, ISO datetimes (with or without an offset, a trailing Z, or a
+    space separator), and numeric epoch strings. Anything else is None.
+
+    bool is rejected explicitly. It is a subclass of int, so without this True
+    would be read as the epoch and silently become 1970-01-01.
+
+    Epoch values are interpreted as UTC, matching how arbitrarily-timezoned
+    upstream timestamps are already flattened to a date elsewhere.
+    """
+    if v is None or v == "":
         return None
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, datetime):
+        return v.date()
     if isinstance(v, date):
         return v
-    try:
-        return date.fromisoformat(str(v))
-    except ValueError:
+    if isinstance(v, (int, float)):
+        try:
+            return datetime.fromtimestamp(v, tz=UTC).date()
+        except (ValueError, OSError, OverflowError):
+            return None
+
+    s = str(v).strip()
+    if not s:
         return None
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        pass
+    # fromisoformat gained broad ISO 8601 support in 3.11 but still will not take
+    # a trailing Z, so normalize that one spelling to an explicit UTC offset.
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).date()
+    except ValueError:
+        pass
+    if s.lstrip("-").replace(".", "", 1).isdigit():
+        try:
+            return datetime.fromtimestamp(float(s), tz=UTC).date()
+        except (ValueError, OSError, OverflowError):
+            return None
+    return None
 
 
 def job_hash(

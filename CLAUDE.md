@@ -57,10 +57,21 @@ single environment: keep them that way, since widening either silently lets one 
 suppress another's rows, with no error to signal the loss. Sources do not all hash identically
 today; do not assume so.
 
-Known defect, tracked as the next task and deliberately not fixed yet: `_safe_date()` uses
-`date.fromisoformat`, which rejects the datetime strings every adapter actually emits, so
-`posted_at` normalizes to `None` and `job_hash` collapses to title/company/location. Fixing
-it changes every stored `job_hash`.
+`_safe_date()` accepts what the adapters actually emit: date and datetime objects, Unix
+epoch numbers, bare ISO dates, ISO datetimes with or without an offset or a trailing Z, and
+numeric epoch strings. It rejects `bool` explicitly, since `bool` subclasses `int` and would
+otherwise be read as an epoch. It previously used `date.fromisoformat`, which rejects every
+datetime string the adapters send, so `posted_at` was NULL and the date component of
+`job_hash` was always empty, silently collapsing genuinely distinct repostings into one row.
+
+Correcting a parser does not rewrite stored hashes. Existing rows keep whatever they were
+written with, and URL deduplication means a re-run inserts nothing for them, so a parser
+change causes no mass re-insertion. Bringing old rows into line is a separate, explicit data
+repair: `etl/repair.py`, exposed as `scripts/repair_posted_at.py`. That repair backfills
+`posted_at` from the authoritative raw row and recomputes `job_hash`, in one transaction,
+for one explicit environment, refusing before it writes if the proposed state would break
+either unique constraint. It never runs `transform_jobs`; materializing postings the old
+hash suppressed is the normal pipeline's job, run separately afterwards.
 
 ## Raw payloads
 
