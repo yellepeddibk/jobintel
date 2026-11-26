@@ -22,22 +22,29 @@ from jobintel.models import IngestRun, Job, JobSkill, RawJob
 # Use production environment filter in prod, else use current ENV setting
 DATA_ENV = "production" if settings.is_production else settings.ENV
 
+# Operator controls (ingest form, cache clearing, debug config) write to the database,
+# affect every viewer, or reveal connection details. The production dashboard is public
+# and has no authentication, so they render only outside production. Production
+# ingestion runs from the scheduled GitHub Actions workflow instead.
+OPERATOR_CONTROLS = not settings.is_production
+
 st.set_page_config(page_title="JobIntel Dashboard", layout="wide")
 st.title("JobIntel Dashboard")
 st.caption("Job board ingestion → normalize → extract skills → analytics")
 
 # Debug: show exactly what config the dashboard is using
-with st.sidebar.expander("🔧 Debug Config", expanded=False):
-    st.write("**settings.ENV:**", settings.ENV)
-    st.write("**DATA_ENV:**", DATA_ENV)
-    db_url = settings.DATABASE_URL
-    # Mask password in display
-    safe_db = db_url
-    if "@" in db_url:
-        # Mask everything between : and @ after //
-        import re as _re
-        safe_db = _re.sub(r"(://[^:]+:)[^@]+(@)", r"\1***\2", db_url)
-    st.write("**DATABASE_URL:**", safe_db)
+if OPERATOR_CONTROLS:
+    with st.sidebar.expander("🔧 Debug Config", expanded=False):
+        st.write("**settings.ENV:**", settings.ENV)
+        st.write("**DATA_ENV:**", DATA_ENV)
+        db_url = settings.DATABASE_URL
+        # Mask password in display
+        safe_db = db_url
+        if "@" in db_url:
+            # Mask everything between : and @ after //
+            import re as _re
+            safe_db = _re.sub(r"(://[^:]+:)[^@]+(@)", r"\1***\2", db_url)
+        st.write("**DATABASE_URL:**", safe_db)
 
 # Ensure tables exist (and surface errors in the UI if DB is unreachable)
 # Skip Alembic migrations on Streamlit Cloud - tables are managed separately
@@ -231,62 +238,66 @@ def get_latest_jobs(
 
 
 with st.sidebar:
-    st.header("Controls")
+    if OPERATOR_CONTROLS:
+        st.header("Controls")
 
-    # Cache control with visual feedback
-    if st.button("🗑️ Clear cache", help="Clear cached data to refresh all views"):
-        st.cache_data.clear()
-        st.cache_resource.clear()
+        # Cache control with visual feedback
+        if st.button("🗑️ Clear cache", help="Clear cached data to refresh all views"):
+            st.cache_data.clear()
+            st.cache_resource.clear()
 
-        # Clear UI state for a complete reset feel
-        for key in list(st.session_state.keys()):
-            if key.startswith(("jobs_sources", "jobs_skills", "jobs_keyword")):
-                del st.session_state[key]
+            # Clear UI state for a complete reset feel
+            for key in list(st.session_state.keys()):
+                if key.startswith(("jobs_sources", "jobs_skills", "jobs_keyword")):
+                    del st.session_state[key]
 
-        st.success("✓ Cache cleared. Rerunning...")
-        st.rerun()
+            st.success("✓ Cache cleared. Rerunning...")
+            st.rerun()
 
-    with st.expander("Ingest jobs (no scripts needed)", expanded=True):
-        ingest_query = st.text_input("Search", value="engineer")
-        ingest_limit = st.number_input("Limit", min_value=1, max_value=500, value=50, step=10)
+        with st.expander("Ingest jobs (no scripts needed)", expanded=True):
+            ingest_query = st.text_input("Search", value="engineer")
+            ingest_limit = st.number_input("Limit", min_value=1, max_value=500, value=50, step=10)
 
-        # Get available sources from registry
-        try:
-            available_sources = list_sources()
-        except Exception as e:
-            st.error(f"Failed to load sources: {e}")
-            available_sources = []
-
-        if not available_sources:
-            st.warning("No sources available. Check source registration.")
-            ingest_source = None
-        else:
-            ingest_source = st.selectbox("Source", options=available_sources, index=0)
-
-        if ingest_source and st.button("Run ingest", type="primary"):
+            # Get available sources from registry
             try:
-                with st.spinner("Fetching and loading jobs..."):
-                    with SessionLocal() as session:
-                        result = run_ingest(session, ingest_source, ingest_query, int(ingest_limit))
-
-                        # Show warnings if any payloads were invalid
-                        for warning in result.warnings:
-                            st.warning(warning)
-
-                    st.success(
-                        f"Fetched={result.fetched} inserted_raw={result.inserted_raw} "
-                        f"inserted_jobs={result.inserted_jobs} "
-                        f"inserted_skills={result.inserted_skills}"
-                    )
-
-                # Refresh cached queries after ingest
-                st.cache_data.clear()
-                st.rerun()
+                available_sources = list_sources()
             except Exception as e:
-                st.error("Ingestion failed:")
-                st.exception(e)
+                st.error(f"Failed to load sources: {e}")
+                available_sources = []
 
-    st.divider()
+            if not available_sources:
+                st.warning("No sources available. Check source registration.")
+                ingest_source = None
+            else:
+                ingest_source = st.selectbox("Source", options=available_sources, index=0)
+
+            if ingest_source and st.button("Run ingest", type="primary"):
+                try:
+                    with st.spinner("Fetching and loading jobs..."):
+                        with SessionLocal() as session:
+                            result = run_ingest(
+                                session, ingest_source, ingest_query, int(ingest_limit)
+                            )
+
+                            # Show warnings if any payloads were invalid
+                            for warning in result.warnings:
+                                st.warning(warning)
+
+                        st.success(
+                            f"Fetched={result.fetched} inserted_raw={result.inserted_raw} "
+                            f"inserted_jobs={result.inserted_jobs} "
+                            f"inserted_skills={result.inserted_skills}"
+                        )
+
+                    # Refresh cached queries after ingest
+                    st.cache_data.clear()
+                    st.rerun()
+                except Exception as e:
+                    st.error("Ingestion failed:")
+                    st.exception(e)
+
+        st.divider()
+
     st.subheader("Jobs Tab Filters")
 
     top_n = st.slider("Top N skills (table)", 5, 50, 25, key="jobs_top_n")
@@ -570,7 +581,10 @@ with tab_jobs:
                 "The raw URL may look truncated but the link works."
             )
         else:
-            st.info("No jobs found. Click 'Run ingest' in the sidebar to fetch jobs.")
+            if OPERATOR_CONTROLS:
+                st.info("No jobs found. Click 'Run ingest' in the sidebar to fetch jobs.")
+            else:
+                st.info("No jobs found. New jobs arrive with the next scheduled ingestion.")
 
     st.divider()
     st.subheader("Job Details")
@@ -710,7 +724,10 @@ with tab_runs:
                         for warning in run.warnings:
                             st.warning(warning)
         else:
-            st.info("No ingest runs recorded yet. Use the sidebar to run an ingest operation.")
+            if OPERATOR_CONTROLS:
+                st.info("No ingest runs recorded yet. Use the sidebar to run an ingest operation.")
+            else:
+                st.info("No ingest runs recorded yet.")
     except Exception as e:
         st.error(f"Failed to load ingest runs: {e}")
         st.exception(e)
