@@ -8,77 +8,17 @@ an empty database failed with NoSuchTableError.
 
 from __future__ import annotations
 
-import os
-import uuid
-from pathlib import Path
-
 import pytest
-from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
 from alembic import command
 from jobintel.models import Base
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BASELINE = "9bfae4d007ee"
 TABLES = {"raw_jobs", "jobs", "job_skills", "ingest_runs"}
 
-# conftest.py validates this URL (local host, jobintel_test* name) before tests run.
-TEST_POSTGRES_URL = os.environ.get("TEST_POSTGRES_URL")
-DB_KINDS = ["sqlite"] + (["postgresql"] if TEST_POSTGRES_URL else [])
-
-
-@pytest.fixture(params=DB_KINDS)
-def make_database(request, tmp_path):
-    """Factory for empty databases of one kind, removed after the test.
-
-    SQLite databases are files in tmp_path. PostgreSQL databases are created on the
-    TEST_POSTGRES_URL server with a unique jobintel_test_ name and dropped afterwards.
-    """
-    created: list[str] = []
-    admin = None
-    if request.param == "postgresql":
-        admin = create_engine(make_url(TEST_POSTGRES_URL), isolation_level="AUTOCOMMIT")
-
-    def make(label: str) -> str:
-        if admin is None:
-            return f"sqlite+pysqlite:///{(tmp_path / f'{label}.db').as_posix()}"
-        name = f"jobintel_test_{label}_{uuid.uuid4().hex[:8]}"
-        with admin.connect() as conn:
-            conn.execute(text(f'CREATE DATABASE "{name}"'))
-        created.append(name)
-        return make_url(TEST_POSTGRES_URL).set(database=name).render_as_string(hide_password=False)
-
-    yield make
-
-    if admin is not None:
-        with admin.connect() as conn:
-            for name in created:
-                conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
-        admin.dispose()
-
-
-@pytest.fixture
-def empty_db(make_database, monkeypatch):
-    """An empty database, plus an Alembic Config pointed at it.
-
-    Patches the settings singleton because alembic/env.py reads DATABASE_URL from it.
-    """
-    from jobintel.core import config as jobintel_config
-
-    url = make_database("empty")
-    monkeypatch.setattr(jobintel_config.settings, "DATABASE_URL", url, raising=False)
-
-    # Config without an .ini file: env.py then skips fileConfig, which would otherwise
-    # reconfigure logging for the rest of the test session.
-    cfg = Config()
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-
-    engine = create_engine(url)
-    yield engine, cfg
-    engine.dispose()
+# The make_database and empty_db fixtures live in conftest.py.
 
 
 def _schema(engine) -> dict[str, dict]:
@@ -87,7 +27,10 @@ def _schema(engine) -> dict[str, dict]:
     result = {}
     for table in sorted(TABLES):
         result[table] = {
-            "columns": {c["name"]: c["nullable"] for c in insp.get_columns(table)},
+            "columns": {
+                c["name"]: {"nullable": c["nullable"], "default": c["default"]}
+                for c in insp.get_columns(table)
+            },
             "primary_key": sorted(insp.get_pk_constraint(table)["constrained_columns"]),
             "uniques": sorted(
                 tuple(uc["column_names"]) for uc in insp.get_unique_constraints(table)
@@ -119,10 +62,7 @@ def test_migrated_schema_matches_the_models(empty_db, make_database):
     """Migrations and models must describe the same tables.
 
     Compares columns and nullability, keys, unique constraints, indexes and foreign
-    keys. Server defaults are not compared, because of one known, pre-existing
-    difference: revision fbbd657b4749 gives raw_jobs.environment and
-    ingest_runs.environment a database default of 'production' that the models do not
-    declare.
+    keys, and server defaults.
     """
     engine, cfg = empty_db
     command.upgrade(cfg, "head")
