@@ -1,5 +1,6 @@
 """Tests for ingest run logging."""
 
+import re
 from unittest.mock import patch
 
 import pytest
@@ -135,7 +136,8 @@ def test_database_error_mid_etl_is_recorded_and_reraised(engine):
     ):
         with factory() as session:
             # The original error, not a PendingRollbackError raised while recording it.
-            with pytest.raises(IntegrityError, match="NOT NULL"):
+            # SQLite says "NOT NULL constraint failed", Postgres "not-null constraint".
+            with pytest.raises(IntegrityError, match=r"(?i)not[ -]null"):
                 run_ingest(session, "remotive", "", 10, environment="test")
             # The caller's session is usable again afterwards.
             assert session.execute(select(1)).scalar() == 1
@@ -143,7 +145,7 @@ def test_database_error_mid_etl_is_recorded_and_reraised(engine):
     with factory() as s:
         run = s.execute(select(IngestRun)).scalar_one()
     assert run.status == "failed"
-    assert "NOT NULL" in run.error
+    assert re.search(r"(?i)not[ -]null", run.error)
     assert run.finished_at is not None
 
 

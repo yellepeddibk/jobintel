@@ -4,6 +4,7 @@ fetch_from_source is mocked, so no network is used; data goes to the in-memory
 SQLite engine from conftest.
 """
 
+import re
 from unittest.mock import patch
 
 import pytest
@@ -112,7 +113,8 @@ def test_a_source_that_breaks_its_session_does_not_stop_the_next(session_factory
     assert isinstance(outcomes[1].error, IntegrityError)
     runs = _runs(session_factory)
     assert runs["arbeitnow"].status == "failed"
-    assert "NOT NULL" in runs["arbeitnow"].error
+    # SQLite says "NOT NULL constraint failed", Postgres "not-null constraint".
+    assert re.search(r"(?i)not[ -]null", runs["arbeitnow"].error)
     assert runs["remoteok"].status == "success"
 
 
