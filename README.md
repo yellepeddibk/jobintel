@@ -395,7 +395,7 @@ jobintel/
 
 ## Testing
 
-Tests run against in-memory or temporary SQLite databases, and source adapter tests mock HTTP, with one exception: `tests/test_sources_registry.py::test_source_fetch_signature` calls the live job board APIs.
+Tests run offline against in-memory or temporary SQLite databases, and source adapter tests mock HTTP. `tests/conftest.py` makes any test that tries to reach a host other than the local machine fail with an explanatory error.
 
 ```bash
 # Run all tests
@@ -406,9 +406,6 @@ pytest -v
 
 # Run specific test file
 pytest tests/test_etl_transform.py
-
-# Run without network access
-pytest --deselect tests/test_sources_registry.py::test_source_fetch_signature
 ```
 
 ### Test Categories

@@ -162,8 +162,8 @@ is a maintainer decision, not an implementation detail.
 
 - New tests must be deterministic and must not depend on live external APIs. Mock at the
   adapter's `requests.get`, or at `fetch_from_source` for pipeline tests.
-- Known exception: one legacy test in `tests/test_sources_registry.py` calls source adapters
-  unmocked and makes real HTTP requests on every CI run. Do not copy the pattern.
+- `tests/conftest.py` blocks outbound network access for every test, failing any attempt to
+  resolve or connect to a non-local host. Do not disable it to make a test pass; mock instead.
 
 ## Change discipline
 
