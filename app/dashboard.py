@@ -69,10 +69,13 @@ if OPERATOR_CONTROLS:
             safe_db = _re.sub(r"(://[^:]+:)[^@]+(@)", r"\1***\2", db_url)
         st.write("**DATABASE_URL:**", safe_db)
 
-# Ensure tables exist (and surface errors in the UI if DB is unreachable)
-# Skip Alembic migrations on Streamlit Cloud - tables are managed separately
+# Check the database is reachable, surfacing a failure in the UI. Outside production,
+# also create any missing tables for quick local setup. In production the schema
+# belongs to Alembic, applied by the scheduled workflow: the public dashboard only
+# reads, so it never changes the database structure.
 try:
-    init_db(skip_migrations=True)
+    if not settings.is_production:
+        init_db()
     # Test DB connection immediately
     with SessionLocal() as test_session:
         test_session.execute(select(1))

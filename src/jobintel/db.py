@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from jobintel.core.config import settings
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ALEMBIC_INI = PROJECT_ROOT / "alembic.ini"
 
 
 def _connect_args(url: str) -> dict[str, Any]:
@@ -24,50 +29,42 @@ engine = create_engine(
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 
-def init_db(skip_migrations: bool = False) -> None:
-    """Initialize database schema.
+def init_db() -> None:
+    """Prepare the database schema. Safe to call more than once.
 
-    Args:
-        skip_migrations: If True, use create_all() even in production.
-                        Useful for Streamlit Cloud where tables already exist.
+    Production: runs Alembic migrations to head, and any error propagates. There is
+    deliberately no create_all() fallback: it would hide the failure, leave pending
+    schema changes unapplied, and create tables Alembic has no record of.
 
-    For production (with migrations): Runs Alembic migrations (alembic upgrade head).
-    For development/testing/skip: Uses SQLAlchemy create_all() for quick setup.
-
-    This function is safe to call multiple times.
+    Development and test: create_all() for quick local setup.
     """
+    if settings.is_production:
+        _upgrade_to_head()
+        return
+
     from jobintel.models import Base
 
-    if settings.is_production and not skip_migrations:
-        # Production: use Alembic migrations for safe, versioned schema changes
-        try:
-            import os
-            from pathlib import Path
+    Base.metadata.create_all(bind=engine)
 
-            from alembic.config import Config
 
-            from alembic import command
+def _upgrade_to_head() -> None:
+    """Run `alembic upgrade head` against the configured database."""
+    from alembic.config import Config
 
-            project_root = Path(__file__).resolve().parents[2]
-            alembic_ini = project_root / "alembic.ini"
+    from alembic import command
 
-            if not alembic_ini.exists():
-                # Alembic not available (e.g., Streamlit Cloud) - use create_all
-                Base.metadata.create_all(bind=engine)
-                return
+    if not ALEMBIC_INI.exists():
+        raise RuntimeError(
+            f"Cannot run migrations: {ALEMBIC_INI} not found. Production schema changes "
+            "go through Alembic only."
+        )
 
-            config = Config(str(alembic_ini))
-            config.set_main_option("script_location", str(project_root / "alembic"))
+    config = Config(str(ALEMBIC_INI))
+    config.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
 
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(project_root)
-                command.upgrade(config, "head")
-            finally:
-                os.chdir(old_cwd)
-        except Exception:
-            # Fallback to create_all if migrations fail
-            Base.metadata.create_all(bind=engine)
-    else:
-        # Development/testing: use create_all() for quick setup
-        Base.metadata.create_all(bind=engine)
+    old_cwd = os.getcwd()
+    try:
+        os.chdir(PROJECT_ROOT)
+        command.upgrade(config, "head")
+    finally:
+        os.chdir(old_cwd)
