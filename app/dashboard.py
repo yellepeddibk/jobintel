@@ -1,3 +1,4 @@
+import logging
 import re
 from datetime import date, timedelta
 
@@ -28,7 +29,29 @@ DATA_ENV = "production" if settings.is_production else settings.ENV
 # ingestion runs from the scheduled GitHub Actions workflow instead.
 OPERATOR_CONTROLS = not settings.is_production
 
+logger = logging.getLogger(__name__)
+
+
+def show_error(message: str, exc: Exception) -> None:
+    """Show a failure without exposing exception details on the public dashboard.
+
+    Exception text can carry connection details (database errors name the host and
+    port) or SQL. In production the viewer sees only `message` and the full exception
+    goes to the server log. Elsewhere the exception and traceback are shown as well.
+    """
+    st.error(message)
+    if settings.is_production:
+        logger.error("%s", message, exc_info=exc)
+    else:
+        st.exception(exc)
+
+
 st.set_page_config(page_title="JobIntel Dashboard", layout="wide")
+
+# Uncaught exceptions bypass show_error, so in production Streamlit itself is told to
+# render only a generic message for them.
+if settings.is_production:
+    st.set_option("client.showErrorDetails", "none")
 st.title("JobIntel Dashboard")
 st.caption("Job board ingestion → normalize → extract skills → analytics")
 
@@ -55,10 +78,7 @@ try:
         test_session.execute(select(1))
     st.success("✓ Database connected")
 except Exception as e:
-    st.error(
-        "❌ Database connection failed. Check DATABASE_URL in Streamlit secrets."
-    )
-    st.exception(e)
+    show_error("❌ Database connection failed. Check DATABASE_URL in Streamlit secrets.", e)
     st.info(
         "Expected format: postgresql+psycopg://user:password@host/database?sslmode=require"
     )
@@ -89,7 +109,7 @@ def get_sources(environment: str) -> list[str]:
             ).all()
         return [r[0] for r in rows if r[0]]
     except Exception as e:
-        st.error(f"Failed to fetch sources: {e}")
+        show_error("Failed to fetch sources.", e)
         return []
 
 
@@ -109,7 +129,7 @@ def get_skill_choices(environment: str, limit: int = 200) -> list[str]:
             ).all()
         return [r[0] for r in rows if r[0]]
     except Exception as e:
-        st.error(f"Failed to fetch skills: {e}")
+        show_error("Failed to fetch skills.", e)
         return []
 
 
@@ -232,8 +252,7 @@ def get_latest_jobs(
 
             return pd.DataFrame(data)
     except Exception as e:
-        st.error(f"Failed to fetch jobs: {e}")
-        st.exception(e)
+        show_error("Failed to fetch jobs.", e)
         return pd.DataFrame()
 
 
@@ -400,7 +419,7 @@ with tab_analytics:
         with kpi4:
             st.metric("Data Sources", kpis["sources_count"])
     except Exception as e:
-        st.error(f"Failed to load KPIs: {e}")
+        show_error("Failed to load KPIs.", e)
 
     # Charts row
     chart_col1, chart_col2 = st.columns(2)
@@ -425,7 +444,7 @@ with tab_analytics:
             else:
                 st.info("No skill data available. Try ingesting some jobs first.")
         except Exception as e:
-            st.error(f"Failed to load top skills: {e}")
+            show_error("Failed to load top skills.", e)
 
     with chart_col2:
         st.markdown("### Skills by Source")
@@ -462,7 +481,7 @@ with tab_analytics:
             else:
                 st.info("No source data available. Try ingesting from multiple sources.")
         except Exception as e:
-            st.error(f"Failed to load skills by source: {e}")
+            show_error("Failed to load skills by source.", e)
 
     # Skill Trends
     st.markdown("### Skill Trends Over Time")
@@ -533,7 +552,7 @@ with tab_analytics:
             else:
                 st.info("No skills found to show trends. Try ingesting some jobs first.")
     except Exception as e:
-        st.error(f"Failed to load skill trends: {e}")
+        show_error("Failed to load skill trends.", e)
 
 
 # ==================== JOBS TAB ====================
@@ -548,8 +567,7 @@ with tab_jobs:
             skills_df = pd.DataFrame(skills, columns=["skill", "count"])
             st.dataframe(skills_df, width="stretch", hide_index=True)
         except Exception as e:
-            st.error("Failed to load top skills:")
-            st.exception(e)
+            show_error("Failed to load top skills.", e)
 
     with col2:
         st.subheader("Latest Ingested Jobs")
@@ -710,7 +728,12 @@ with tab_runs:
                     with st.expander(
                         f"❌ {run.source} - {run.started_at.strftime('%Y-%m-%d %H:%M:%S')}"
                     ):
-                        st.error(run.error or "No error message recorded")
+                        if settings.is_production:
+                            # Stored error text is an exception string and can include
+                            # SQL or connection details; the workflow log has it in full.
+                            st.error("Error details are in the ingestion workflow logs.")
+                        else:
+                            st.error(run.error or "No error message recorded")
 
             # Show runs with warnings
             warning_runs = [r for r in runs if r.warnings]
@@ -729,5 +752,4 @@ with tab_runs:
             else:
                 st.info("No ingest runs recorded yet.")
     except Exception as e:
-        st.error(f"Failed to load ingest runs: {e}")
-        st.exception(e)
+        show_error("Failed to load ingest runs.", e)

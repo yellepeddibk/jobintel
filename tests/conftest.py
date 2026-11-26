@@ -17,6 +17,21 @@ from sqlalchemy.orm import sessionmaker
 from jobintel.models import Base
 
 
+@pytest.fixture(autouse=True)
+def _restore_streamlit_error_details():
+    """Undo the process-wide option a production dashboard render sets.
+
+    app/dashboard.py calls st.set_option("client.showErrorDetails", "none") when
+    ENV=production, and Streamlit config is global to the process, so without this a
+    render in one test would change how later tests display exceptions.
+    """
+    from streamlit import config as st_config
+
+    before = st_config.get_option("client.showErrorDetails")
+    yield
+    st_config.set_option("client.showErrorDetails", before)
+
+
 @pytest.fixture
 def engine():
     """Create a fresh in-memory SQLite engine for each test."""
