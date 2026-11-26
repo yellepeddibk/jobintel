@@ -6,6 +6,7 @@ Keeps pipeline behavior consistent across all entrypoints.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -18,6 +19,8 @@ from jobintel.etl.skills import extract_skills_for_all_jobs
 from jobintel.etl.sources.registry import fetch_from_source
 from jobintel.etl.transform import transform_jobs
 from jobintel.models import IngestRun
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -114,6 +117,8 @@ def run_ingest(
     )
     session.add(run)
     session.commit()
+    # Captured now: after a failed rollback, reading run.id could itself fail.
+    run_id = run.id
 
     try:
         # Fetch from source
@@ -140,11 +145,20 @@ def run_ingest(
             warnings=warnings,
         )
     except Exception as e:
-        # Update run with failure
-        run.status = "failed"
-        run.finished_at = datetime.now(UTC)
-        run.error = str(e)
-        session.commit()
+        # A database error mid-ETL leaves the session unusable until it is rolled
+        # back, so roll back before recording. That discards only the failed,
+        # uncommitted work; anything the ETL steps had already committed stays.
+        # If recording fails too, log it and still raise the original error, which
+        # is the real cause.
+        try:
+            session.rollback()
+            run.status = "failed"
+            run.finished_at = datetime.now(UTC)
+            run.error = str(e)
+            session.commit()
+        except Exception:
+            logger.exception("Could not record failed ingest run %s", run_id)
+            session.rollback()
         raise
 
 

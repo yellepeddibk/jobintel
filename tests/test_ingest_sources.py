@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from jobintel.etl import pipeline
@@ -90,8 +91,8 @@ def test_all_sources_succeed(session_factory):
 def test_a_source_that_breaks_its_session_does_not_stop_the_next(session_factory):
     """A database error mid-ETL leaves that session needing a rollback.
 
-    Each source gets a fresh session, so the next one is unaffected. What the broken
-    source itself records is out of scope here.
+    Each source gets a fresh session, so the next one is unaffected, and the broken
+    source is still recorded as failed with the original error.
     """
     real_etl = pipeline.run_etl_from_payloads
 
@@ -108,7 +109,11 @@ def test_a_source_that_breaks_its_session_does_not_stop_the_next(session_factory
         outcomes = run_ingest_sources(session_factory, SOURCES, "", 10, environment=ENV)
 
     assert [o.ok for o in outcomes] == [True, False, True]
-    assert _runs(session_factory)["remoteok"].status == "success"
+    assert isinstance(outcomes[1].error, IntegrityError)
+    runs = _runs(session_factory)
+    assert runs["arbeitnow"].status == "failed"
+    assert "NOT NULL" in runs["arbeitnow"].error
+    assert runs["remoteok"].status == "success"
 
 
 def test_keyboard_interrupt_is_not_swallowed(session_factory):
