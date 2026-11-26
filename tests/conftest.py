@@ -121,6 +121,70 @@ def pytest_report_header(config):
     return "database fixtures: SQLite"
 
 
+DB_KINDS = ["sqlite"] + (["postgresql"] if TEST_POSTGRES_URL else [])
+
+
+@pytest.fixture(params=DB_KINDS)
+def make_database(request, tmp_path):
+    """Factory for empty databases of one kind, removed after the test.
+
+    Parametrized: SQLite always, plus PostgreSQL when TEST_POSTGRES_URL is set. SQLite
+    databases are files in tmp_path. PostgreSQL databases are created on the
+    TEST_POSTGRES_URL server with a unique jobintel_test_ name and dropped afterwards.
+    """
+    import uuid
+
+    from sqlalchemy import text
+    from sqlalchemy.engine import make_url
+
+    created: list[str] = []
+    admin = None
+    if request.param == "postgresql":
+        admin = create_engine(make_url(TEST_POSTGRES_URL), isolation_level="AUTOCOMMIT")
+
+    def make(label: str) -> str:
+        if admin is None:
+            return f"sqlite+pysqlite:///{(tmp_path / f'{label}.db').as_posix()}"
+        name = f"jobintel_test_{label}_{uuid.uuid4().hex[:8]}"
+        with admin.connect() as conn:
+            conn.execute(text(f'CREATE DATABASE "{name}"'))
+        created.append(name)
+        return make_url(TEST_POSTGRES_URL).set(database=name).render_as_string(hide_password=False)
+
+    yield make
+
+    if admin is not None:
+        with admin.connect() as conn:
+            for name in created:
+                conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+        admin.dispose()
+
+
+@pytest.fixture
+def empty_db(make_database, monkeypatch):
+    """An empty database from make_database, plus an Alembic Config pointed at it.
+
+    Patches the settings singleton because alembic/env.py reads DATABASE_URL from it.
+    """
+    from pathlib import Path
+
+    from alembic.config import Config
+
+    from jobintel.core import config as jobintel_config
+
+    url = make_database("empty")
+    monkeypatch.setattr(jobintel_config.settings, "DATABASE_URL", url, raising=False)
+
+    # Config without an .ini file: env.py then skips fileConfig, which would otherwise
+    # reconfigure logging for the rest of the test session.
+    cfg = Config()
+    cfg.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
+
+    eng = create_engine(url)
+    yield eng, cfg
+    eng.dispose()
+
+
 @pytest.fixture
 def engine():
     """A fresh, empty schema for each test.
