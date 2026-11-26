@@ -16,3 +16,33 @@ jobs:
       - run: pip install -r requirements.txt -r requirements-dev.txt
       - run: ruff check .
       - run: pytest
+
+  # Same suite, with the shared database fixtures and the empty-database migration
+  # tests on a real PostgreSQL, which is what production runs. The service container
+  # is created for this job and discarded with it; its credentials are throwaway.
+  test-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: jobintel
+          POSTGRES_PASSWORD: jobintel_ci
+          POSTGRES_DB: jobintel_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U jobintel -d jobintel_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TEST_POSTGRES_URL: postgresql+psycopg://jobintel:jobintel_ci@localhost:5432/jobintel_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: pytest
