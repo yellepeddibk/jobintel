@@ -127,7 +127,7 @@ Each pipeline run is tracked in the `ingest_runs` table with:
 - Counts: fetched, inserted_raw, inserted_jobs, inserted_skills
 - Warnings and error messages
 
-A run is marked `failed` when the source adapter raises. The Arbeitnow adapter currently logs request errors, exhausted rate-limit retries, and invalid JSON and stops paginating instead of raising, so a failed or partial Arbeitnow fetch is recorded as `success` with a lower `fetched` count.
+A run is marked `failed` when the source adapter raises. Arbeitnow raises when any page it needs fails (a request error, exhausted rate-limit retries, or invalid JSON), so a failed or partial Arbeitnow fetch is recorded as `failed` and none of its pages are ingested for that run.
 
 ---
 

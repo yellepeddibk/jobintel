@@ -2,11 +2,18 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+import requests
+
+from jobintel.etl.pipeline import run_ingest
 from jobintel.etl.sources.arbeitnow import (
+    MAX_RETRIES,
+    ArbeitnowFetchError,
     ArbeitnowSource,
     _normalize_job,
     fetch_arbeitnow_jobs,
 )
+from jobintel.models import IngestRun, RawJob
 
 # Sample API response data
 SAMPLE_JOB = {
@@ -148,14 +155,11 @@ class TestFetchArbeitnowJobs:
 
     @patch("jobintel.etl.sources.arbeitnow.requests.get")
     def test_fetch_api_error(self, mock_get):
-        """Test fetch handles API errors gracefully."""
-        import requests
-
+        """A request error raises instead of looking like an empty result."""
         mock_get.side_effect = requests.RequestException("Network error")
 
-        payloads = fetch_arbeitnow_jobs()
-
-        assert payloads == []
+        with pytest.raises(ArbeitnowFetchError, match="page 1 failed: Network error"):
+            fetch_arbeitnow_jobs()
 
     @patch("jobintel.etl.sources.arbeitnow.requests.get")
     def test_fetch_empty_response(self, mock_get):
@@ -168,6 +172,91 @@ class TestFetchArbeitnowJobs:
         payloads = fetch_arbeitnow_jobs()
 
         assert payloads == []
+
+
+def _response(body=None, status=200, json_error=None):
+    resp = MagicMock()
+    resp.status_code = status
+    if status >= 400 and status != 429:
+        resp.raise_for_status.side_effect = requests.HTTPError(f"{status} Server Error")
+    if json_error is not None:
+        resp.json.side_effect = json_error
+    else:
+        resp.json.return_value = body
+    return resp
+
+
+PAGE_WITH_NEXT = {
+    "data": [SAMPLE_JOB],
+    "links": {"next": "https://arbeitnow.com/api/job-board-api?page=2"},
+}
+
+
+@patch("jobintel.etl.sources.arbeitnow.time.sleep")
+@patch("jobintel.etl.sources.arbeitnow.requests.get")
+class TestFetchFailures:
+    """A failed or partial fetch must raise, never return a short list."""
+
+    def test_later_page_failure_discards_earlier_pages(self, mock_get, _sleep):
+        mock_get.side_effect = [_response(PAGE_WITH_NEXT), _response(status=500)]
+
+        with pytest.raises(ArbeitnowFetchError, match="page 2 failed: 500 Server Error"):
+            fetch_arbeitnow_jobs(limit=100)
+        assert mock_get.call_count == 2
+
+    def test_exhausted_rate_limit_raises(self, mock_get, _sleep):
+        mock_get.return_value = _response(status=429)
+
+        with pytest.raises(ArbeitnowFetchError, match=r"page 1 still rate limited \(429\)"):
+            fetch_arbeitnow_jobs()
+        assert mock_get.call_count == MAX_RETRIES
+
+    def test_invalid_json_raises(self, mock_get, _sleep):
+        mock_get.return_value = _response(json_error=ValueError("Expecting value"))
+
+        with pytest.raises(ArbeitnowFetchError, match="page 1 returned invalid JSON"):
+            fetch_arbeitnow_jobs()
+
+    def test_error_keeps_original_exception_as_cause(self, mock_get, _sleep):
+        original = requests.ConnectionError("connection reset")
+        mock_get.side_effect = original
+
+        with pytest.raises(ArbeitnowFetchError) as exc_info:
+            fetch_arbeitnow_jobs()
+        assert exc_info.value.__cause__ is original
+
+    def test_rate_limit_then_success_still_returns_jobs(self, mock_get, _sleep):
+        mock_get.side_effect = [_response(status=429), _response(SAMPLE_API_RESPONSE)]
+
+        payloads = fetch_arbeitnow_jobs()
+
+        assert len(payloads) == 1
+        assert mock_get.call_count == 2
+
+    def test_reaching_limit_does_not_fetch_or_fail_on_the_next_page(self, mock_get, _sleep):
+        mock_get.side_effect = [_response(PAGE_WITH_NEXT), _response(status=500)]
+
+        payloads = fetch_arbeitnow_jobs(limit=1)
+
+        assert len(payloads) == 1
+        assert mock_get.call_count == 1
+
+
+@patch("jobintel.etl.sources.arbeitnow.time.sleep")
+@patch("jobintel.etl.sources.arbeitnow.requests.get")
+def test_failed_fetch_is_recorded_as_failed_run(mock_get, _sleep, session):
+    """End to end through the registry: the run is failed, not success with fewer jobs."""
+    mock_get.side_effect = [_response(PAGE_WITH_NEXT), _response(status=500)]
+
+    with pytest.raises(ArbeitnowFetchError):
+        run_ingest(session, "arbeitnow", "", 200, environment="test")
+
+    run = session.query(IngestRun).one()
+    assert run.status == "failed"
+    assert run.error == "Arbeitnow page 2 failed: 500 Server Error"
+    assert run.finished_at is not None
+    # Page 1's job was discarded with the failed fetch.
+    assert session.query(RawJob).count() == 0
 
 
 class TestArbeitnowSource:
