@@ -293,7 +293,10 @@ python scripts/run_live_etl.py --source remotive
 python scripts/run_live_etl.py --search "python" --source arbeitnow
 ```
 
-**Manual (Dashboard):**
+**Manual (Dashboard, outside production):**
+
+The ingest form, cache control, and debug panel appear only when `ENV` is not `production`, so the hosted dashboard does not offer them.
+
 1. Open the "Ingest jobs" panel in the sidebar
 2. Enter a search query and limit, and select a source
 3. Click "Run ingest" to fetch and process jobs
