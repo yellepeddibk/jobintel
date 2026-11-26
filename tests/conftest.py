@@ -10,11 +10,60 @@ import os
 os.environ["ENV"] = "test"
 os.environ["DATABASE_URL"] = "sqlite+pysqlite:///:memory:"
 
+import socket
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from jobintel.models import Base
+
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "", None}
+_real_getaddrinfo = socket.getaddrinfo
+_real_connect = socket.socket.connect
+_real_connect_ex = socket.socket.connect_ex
+
+
+def _is_local(host) -> bool:
+    if isinstance(host, bytes):
+        host = host.decode()
+    return host in _LOCAL_HOSTS or (isinstance(host, str) and host.startswith("127."))
+
+
+def _refuse(target) -> None:
+    raise RuntimeError(
+        f"Tests must not use the network (attempted to reach {target!r}). "
+        "Mock the adapter's requests.get, or fetch_from_source for pipeline tests."
+    )
+
+
+@pytest.fixture(autouse=True)
+def _block_network(monkeypatch):
+    """Fail any test that tries to reach a host other than this machine.
+
+    Name lookup is blocked as well as connecting, because a lookup is itself a
+    network request. Loopback and Unix sockets stay allowed, since local machinery
+    such as an event loop's internal socket pair uses them.
+    """
+
+    def getaddrinfo(host, *args, **kwargs):
+        if not _is_local(host):
+            _refuse(host)
+        return _real_getaddrinfo(host, *args, **kwargs)
+
+    def connect(self, address):
+        if not isinstance(address, (str, bytes)) and not _is_local(address[0]):
+            _refuse(address)
+        return _real_connect(self, address)
+
+    def connect_ex(self, address):
+        if not isinstance(address, (str, bytes)) and not _is_local(address[0]):
+            _refuse(address)
+        return _real_connect_ex(self, address)
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(socket.socket, "connect", connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", connect_ex)
 
 
 @pytest.fixture(autouse=True)

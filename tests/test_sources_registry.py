@@ -1,5 +1,7 @@
 """Tests for source registry and validation."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from jobintel.etl.sources.base import validate_payload, validate_payloads
@@ -69,10 +71,77 @@ def test_get_source_unknown_raises():
         get_source("nonexistent")
 
 
+# One minimal response per job board, shaped like that board's real API body, keyed
+# by a fragment of the URL its adapter requests. Each job mentions "test" so it
+# survives the client-side search filter in the adapters that apply one.
+_CANNED_RESPONSES = {
+    "remotive.com": {
+        "jobs": [
+            {
+                "id": 1,
+                "url": "https://remotive.com/remote-jobs/1",
+                "title": "Test Engineer",
+                "company_name": "Acme",
+                "candidate_required_location": "Worldwide",
+                "publication_date": "2026-01-05T10:00:00",
+                "description": "<p>test automation</p>",
+            }
+        ]
+    },
+    "arbeitnow.com": {
+        "data": [
+            {
+                "slug": "test-engineer-1",
+                "url": "https://www.arbeitnow.com/jobs/test-engineer-1",
+                "title": "Test Engineer",
+                "company_name": "Acme",
+                "location": "Berlin",
+                "description": "test automation",
+                "created_at": 1767607200,
+            }
+        ],
+        "links": {"next": None},
+    },
+    "remoteok.com": [
+        {"legal": "API terms notice; the first element is metadata"},
+        {
+            "id": "1",
+            "url": "https://remoteok.com/remote-jobs/1",
+            "position": "Test Engineer",
+            "company": "Acme",
+            "location": "Remote",
+            "description": "test automation",
+            "epoch": 1767607200,
+        },
+    ],
+}
+
+
+def _fake_get(url, *args, **kwargs):
+    for fragment, body in _CANNED_RESPONSES.items():
+        if fragment in url:
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = body
+            return resp
+    raise AssertionError(f"Unexpected URL requested: {url}")
+
+
 def test_source_fetch_signature():
-    """Test that registered sources have correct fetch signature."""
-    for source_name in list_sources():
-        source = get_source(source_name)
-        # Should have fetch method that accepts search and limit
-        payloads = source.fetch(search="test", limit=1)
-        assert isinstance(payloads, list)
+    """Every registered source accepts search and limit and returns a list.
+
+    HTTP is replaced with canned responses, so this runs offline and does not depend
+    on the job boards being up.
+    """
+    with patch("requests.get", side_effect=_fake_get) as mock_get:
+        for source_name in list_sources():
+            mock_get.reset_mock()
+            source = get_source(source_name)
+
+            payloads = source.fetch(search="test", limit=1)
+
+            assert isinstance(payloads, list)
+            assert len(payloads) == 1
+            assert payloads[0]["source"] == source_name
+            # The adapter went through its real request path, not around it.
+            assert mock_get.call_count == 1
