@@ -447,14 +447,12 @@ pytest tests/test_etl_transform.py
 1. Create a free account at [neon.tech](https://neon.tech)
 2. Create a new project (e.g., `jobintel`)
 3. Copy the connection string
-4. Initialize tables:
+4. Create the tables by running the migrations, which build the full schema on an empty database:
    ```bash
    export DATABASE_URL="postgresql+psycopg://user:pass@host/db?sslmode=require"
    export ENV="production"
-   python -c "from jobintel.db import init_db; init_db()"
-   alembic stamp head
+   python scripts/migrate_db.py
    ```
-   `alembic upgrade head` cannot build the schema on an empty database, because the first revision expects the tables to exist already. `init_db()` falls back to creating the tables directly, and `alembic stamp head` then records them as current.
 
 ### 2. Dashboard Hosting (Streamlit Cloud)
 
