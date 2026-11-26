@@ -24,7 +24,7 @@ DATA_ENV = "production" if settings.is_production else settings.ENV
 
 st.set_page_config(page_title="JobIntel Dashboard", layout="wide")
 st.title("JobIntel Dashboard")
-st.caption("Live ingestion → normalize → extract skills → analytics")
+st.caption("Job board ingestion → normalize → extract skills → analytics")
 
 # Debug: show exactly what config the dashboard is using
 with st.sidebar.expander("🔧 Debug Config", expanded=False):
@@ -462,7 +462,10 @@ with tab_analytics:
         "Time granularity",
         options=list(granularity_options.keys()),
         index=0,
-        help="Auto: 6h for ≤7 days, daily for ≤60 days, weekly for longer periods",
+        help=(
+            "Groups jobs by when they were ingested, not by a refresh schedule. "
+            "Auto uses 6-hour buckets."
+        ),
     )
     granularity = granularity_options[granularity_label]
 
@@ -504,7 +507,8 @@ with tab_analytics:
                         if unique_buckets == 1:
                             st.warning(
                                 "⚠️ Only one time bucket found. The chart will show markers only. "
-                                "Run more ingestions (every 6 hours) to see trend lines."
+                                "Trend lines appear once the selected range spans more than one "
+                                "ingestion bucket."
                             )
 
                         trends_pivot = trends_df.pivot(

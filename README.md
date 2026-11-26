@@ -3,7 +3,7 @@
 [![CI](https://github.com/yellepeddibk/jobintel/actions/workflows/ci.yml/badge.svg)](https://github.com/yellepeddibk/jobintel/actions/workflows/ci.yml)
 [![Scheduled Ingestion](https://github.com/yellepeddibk/jobintel/actions/workflows/ingest-jobs.yml/badge.svg)](https://github.com/yellepeddibk/jobintel/actions/workflows/ingest-jobs.yml)
 
-A production-grade job market intelligence platform that aggregates job postings from multiple sources, normalizes data through a robust ETL pipeline, extracts skill requirements using NLP techniques, and provides real-time analytics through an interactive dashboard.
+A job market analytics project that ingests postings from three public job board APIs, normalizes them through an ETL pipeline, tags skills with a keyword dictionary, and serves analytics through a Streamlit dashboard. Production ingestion runs on a weekly schedule.
 
 **[🚀 Live Dashboard](https://jobintel-main.streamlit.app/)**
 
@@ -29,13 +29,13 @@ A production-grade job market intelligence platform that aggregates job postings
 
 ## Overview
 
-JobIntel solves the challenge of understanding job market trends by providing a unified view of job postings across multiple job boards. The platform:
+JobIntel provides a unified view of job postings collected from several job boards. The platform:
 
-- Aggregates job postings from multiple sources (Remotive, RemoteOK, Arbeitnow)
-- Normalizes heterogeneous data into a consistent schema
-- Extracts skills and technologies mentioned in job descriptions
-- Provides real-time analytics and trend visualization
-- Maintains data quality through deduplication and validation
+- Collects postings from Remotive and RemoteOK (remote-job boards) and Arbeitnow (a general job board with mostly German listings; the adapter keeps on-site and remote roles alike)
+- Normalizes heterogeneous payloads into a consistent schema
+- Tags postings with skills from a fixed keyword dictionary
+- Provides analytics and trend charts over the ingested data
+- Skips duplicate postings and drops payloads missing required fields
 
 ---
 
@@ -65,9 +65,9 @@ JobIntel solves the challenge of understanding job market trends by providing a 
                              |  Streamlit       |     |  - KPI Queries   |
                              |  Dashboard       |     |  - Skill Trends  |
                              |                  |     |  - Aggregations  |
-                             |  - Jobs Tab      |     |                  |
-                             |  - Analytics Tab |     +------------------+
-                             |  - Ingest Tab    |
+                             |  - Analytics Tab |     |                  |
+                             |  - Jobs Tab      |     +------------------+
+                             |  - Ingest Runs   |
                              +------------------+
 ```
 
@@ -84,7 +84,7 @@ The ETL pipeline is the core of JobIntel, designed for reliability, idempotency,
     |   EXTRACT   |---->|   TRANSFORM   |---->|   LOAD         |---->|   ENRICH      |
     +-------------+     +---------------+     +----------------+     +---------------+
     |             |     |               |     |                |     |               |
-    | Fetch from  |     | Normalize     |     | Upsert to      |     | Extract       |
+    | Fetch from  |     | Normalize     |     | Insert new     |     | Extract       |
     | source APIs |     | payload to    |     | raw_jobs with  |     | skills from   |
     |             |     | canonical     |     | content hash   |     | descriptions  |
     | Validate    |     | schema        |     | deduplication  |     |               |
@@ -101,20 +101,21 @@ The ETL pipeline is the core of JobIntel, designed for reliability, idempotency,
 | Component | Description | Location |
 |-----------|-------------|----------|
 | Source Registry | Pluggable source adapters with common interface | `src/jobintel/etl/sources/` |
-| Raw Ingestion | Content-hash based idempotent upserts | `src/jobintel/etl/raw.py` |
-| Transformation | URL-based deduplication, schema normalization | `src/jobintel/etl/transform.py` |
-| Skill Extraction | Dictionary-based NLP skill extraction | `src/jobintel/etl/skills.py` |
-| Pipeline Orchestration | Centralized ETL runner with observability | `src/jobintel/etl/pipeline.py` |
+| Raw Ingestion | Insert-if-new raw rows, keyed on content hash and URL within one environment | `src/jobintel/etl/raw.py` |
+| Transformation | Insert-only normalization, deduplicated by URL and normalized hash within one environment | `src/jobintel/etl/transform.py` |
+| Skill Extraction | Regex matching against a fixed dictionary of 10 skills | `src/jobintel/etl/skills.py` |
+| Pipeline Orchestration | Shared ingest runner for the CLI, the scheduled workflow, and the dashboard; records each run | `src/jobintel/etl/pipeline.py` |
+| Retrieval | Deterministic, explainable job ranking with per-component score breakdowns. Library code with tests; not yet called by the dashboard or any API | `src/jobintel/retrieval/` |
 
 ### Idempotency and Deduplication
 
-The pipeline ensures data quality through multiple deduplication strategies:
+Deduplication prevents duplicate inserts. It does not update listings that already exist.
 
-1. **Content Hash Deduplication**: Each raw job payload is hashed using SHA-256. Duplicate payloads are rejected at ingestion time.
+1. **Raw ingestion** (`upsert_raw_job`): a payload is skipped when a `raw_jobs` row in the same environment already has the same content hash (and the same URL, when the payload has one). Remotive and RemoteOK payloads are hashed with SHA-256 over a fixed set of payload fields; the Arbeitnow adapter supplies its own MD5 hash of title, company, and description. A payload whose content has changed gets a new hash and is stored as an additional raw row.
 
-2. **URL-Based Deduplication**: Normalized jobs are deduplicated by URL to prevent the same job from appearing multiple times.
+2. **Normalized jobs** (`transform_jobs`): a raw row becomes a `jobs` row only if no job in the same environment already has its URL or its normalized hash (SHA-256 of the trimmed, lowercased title, company, and location plus the posted date). The database enforces the same identity with `UNIQUE(environment, url)` and `UNIQUE(environment, hash)`.
 
-3. **Idempotent Operations**: All pipeline operations can be safely re-run without creating duplicate data.
+3. **Re-runs**: running the pipeline again does not create duplicate rows. Because transformation is insert-only, an existing job keeps the content of the first raw row it was normalized from; later changes to a listing are kept in `raw_jobs` but not applied to `jobs`.
 
 ### Observability
 
@@ -126,6 +127,8 @@ Each pipeline run is tracked in the `ingest_runs` table with:
 - Counts: fetched, inserted_raw, inserted_jobs, inserted_skills
 - Warnings and error messages
 
+A run is marked `failed` when the source adapter raises. The Arbeitnow adapter currently logs request errors, exhausted rate-limit retries, and invalid JSON and stops paginating instead of raising, so a failed or partial Arbeitnow fetch is recorded as `success` with a lower `fetched` count.
+
 ---
 
 ## Data Model
@@ -135,7 +138,7 @@ Each pipeline run is tracked in the `ingest_runs` table with:
     |    raw_jobs      |          |            jobs              |     |   job_skills     |
     +------------------+          +------------------------------+     +------------------+
     | id (PK)          |          | id (PK)                      |     | job_id (PK, FK)  |
-    | source           |   1:1    | environment                  | 1:N | skill (PK)       |
+    | source           |   N:1    | environment                  | 1:N | skill (PK)       |
     | payload_json     |--------->| title                        |<----|                  |
     | ingested_at      | (env +   | company                      |     +------------------+
     | environment      |   url)   | location                     |
@@ -165,40 +168,39 @@ Each pipeline run is tracked in the `ingest_runs` table with:
 
 | Table | Purpose |
 |-------|---------|
-| `raw_jobs` | Immutable store of original job payloads from sources |
+| `raw_jobs` | Append-only store of each adapter's normalized payload (not the untouched API response). Application code never updates or deletes these rows; no database constraint enforces that |
 | `jobs` | Normalized job postings, deduplicated **within an environment** and carrying the environment they were ingested under |
 | `job_skills` | Many-to-many relationship between jobs and extracted skills |
-| `ingest_runs` | Audit log of all pipeline executions |
+| `ingest_runs` | One row per ingest run, from the CLI, the scheduled workflow, or the dashboard |
 
 ---
 
 ## Features
 
 ### Multi-Source Ingestion
-- Pluggable source architecture supporting multiple job boards
+- Pluggable source adapters behind a common interface and registry
 - Currently integrated: Remotive, RemoteOK, Arbeitnow
-- Automated ingestion via GitHub Actions (every 6 hours)
-- Rate limiting and retry logic for API reliability
+- Scheduled ingestion via GitHub Actions once a week (Sundays at 00:00 UTC), plus manual runs from the Actions tab
+- Arbeitnow requests are paced and retried on HTTP 429; Remotive and RemoteOK make a single request with a timeout
 
-### Real-Time Dashboard
-- Interactive job browser with filtering by source, skills, location, and date
-- Top skills visualization with configurable limits
-- Time-bucketed skill trends with granularity selector (6-hour, daily, weekly)
-- Auto-detection of optimal granularity based on date range
-- Skills by source comparison charts
-- Ingest run monitoring for operational visibility
+### Dashboard
+- Job browser with filtering by keyword, source, skills, location, and date
+- Top skills chart and table with configurable limits
+- Skill trend chart grouped into 6-hour, daily, or weekly buckets by ingestion time. These are chart groupings, not refresh intervals; data changes only when an ingest runs
+- Skills by source comparison chart
+- Ingest run history with failure and warning details
 
-### Production Infrastructure
-- Neon PostgreSQL for serverless production database
-- Streamlit Cloud for zero-ops dashboard hosting
-- GitHub Actions for scheduled data collection
-- Environment isolation (development, test, production)
+### Hosted Deployment
+- Neon PostgreSQL as the production database
+- Streamlit Community Cloud for dashboard hosting
+- GitHub Actions for scheduled ingestion
+- Environment tagging (development, test, production) on every raw row, job, and ingest run
 
 ### Data Quality
-- Content-hash based deduplication prevents duplicate ingestion
+- Content-hash and URL checks skip payloads already ingested in the same environment
 - URL and normalized-hash job identity is scoped per environment: unique listings within an environment, and development data can never merge into production
-- Validation warnings surfaced in ingest run logs
-- Idempotent pipeline operations safe to re-run
+- Payloads missing a source, URL, or title are dropped and reported as warnings on the ingest run
+- Re-runs do not create duplicate rows; existing jobs are not updated when a listing changes
 
 ---
 
@@ -207,7 +209,7 @@ Each pipeline run is tracked in the `ingest_runs` table with:
 | Layer | Technology |
 |-------|------------|
 | Language | Python 3.11+ |
-| Database | PostgreSQL 15+ (Neon serverless in production) |
+| Database | PostgreSQL (Neon in production, Docker Compose locally); SQLite by default for local runs and tests |
 | ORM | SQLAlchemy 2.0 with DeclarativeBase |
 | Migrations | Alembic |
 | Dashboard | Streamlit (Streamlit Cloud in production) |
@@ -215,7 +217,7 @@ Each pipeline run is tracked in the `ingest_runs` table with:
 | HTTP Client | Requests |
 | Configuration | Pydantic Settings |
 | CI/CD | GitHub Actions |
-| Testing | Pytest (48 tests) |
+| Testing | Pytest |
 | Linting | Ruff |
 | Containerization | Docker Compose (local development) |
 
@@ -226,7 +228,7 @@ Each pipeline run is tracked in the `ingest_runs` table with:
 ### Prerequisites
 
 - Python 3.11 or higher
-- Docker and Docker Compose
+- Docker and Docker Compose (optional, for local PostgreSQL)
 - Git
 
 ### Installation
@@ -240,12 +242,16 @@ cd jobintel
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-# Install dependencies
+# Install dependencies (requirements.txt also installs jobintel in editable mode)
 pip install -r requirements.txt
-pip install -e .
+
+# Test and lint tools
+pip install -r requirements-dev.txt
 ```
 
 ### Database Setup
+
+SQLite (`sqlite:///./jobintel.db`) is the default and needs no setup. To use PostgreSQL locally instead:
 
 ```bash
 # Start PostgreSQL container
@@ -253,7 +259,12 @@ docker-compose up -d
 
 # Verify database is running
 docker-compose ps
+
+# Point DATABASE_URL at the container (port 5433)
+cp .env.example .env
 ```
+
+The dashboard and the ingestion scripts write to whatever `DATABASE_URL` is configured. Check it before running them.
 
 ### Running the Application
 
@@ -266,9 +277,9 @@ streamlit run app/dashboard.py
 
 ### Ingesting Jobs
 
-**Automated (Production):**
-- GitHub Actions runs every 6 hours
-- Ingests from all 3 sources automatically (Remotive, RemoteOK, Arbeitnow)
+**Scheduled (Production):**
+- GitHub Actions runs once a week (Sundays at 00:00 UTC) and can also be triggered manually
+- Each run applies migrations, then ingests Remotive, Arbeitnow, and RemoteOK in turn (up to 200 postings per source). If a source raises, the remaining sources are skipped for that run
 
 **Manual (CLI):**
 ```bash
@@ -283,11 +294,10 @@ python scripts/run_live_etl.py --search "python" --source arbeitnow
 ```
 
 **Manual (Dashboard):**
-1. Navigate to the "Ingest" tab
-2. Select a source from the dropdown
-3. Optionally enter a search query
-4. Click "Run Ingest" to fetch and process jobs
-5. View results in the Jobs tab
+1. Open the "Ingest jobs" panel in the sidebar
+2. Enter a search query and limit, and select a source
+3. Click "Run ingest" to fetch and process jobs
+4. View results in the Jobs and Ingest Runs tabs
 
 ---
 
@@ -305,14 +315,16 @@ Configuration is managed through environment variables, with support for `.env` 
 | Mode | Behavior |
 |------|----------|
 | `development` | Default for local development. Uses local SQLite or Docker Postgres. |
-| `test` | For running tests. Isolated test database with fixtures. |
-| `production` | For deployment. Dashboard shows only production-tagged records. |
+| `test` | Set by the test suite, which runs against in-memory or temporary SQLite databases. |
+| `production` | Used by the scheduled workflow and the hosted dashboard. |
+
+In every mode, the pipeline writes rows tagged with the current `ENV`, and the dashboard shows only rows tagged with it.
 
 ### Example `.env` File
 
 ```bash
 DATABASE_URL=postgresql+psycopg://jobintel:password@localhost:5433/jobintel
-ENV=production
+ENV=development
 ```
 
 ---
@@ -324,7 +336,7 @@ jobintel/
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml              # CI pipeline (lint + test)
-│       └── ingest-jobs.yml     # Scheduled ingestion (every 6h)
+│       └── ingest-jobs.yml     # Scheduled ingestion (weekly, plus manual runs)
 ├── alembic/                    # Database migrations
 │   ├── versions/               # Migration scripts
 │   └── env.py                  # Alembic configuration
@@ -337,6 +349,7 @@ jobintel/
 │   ├── fetch_remotive.py       # Standalone fetch script
 │   ├── init_db.py              # Database initialization
 │   ├── migrate_db.py           # Run Alembic migrations
+│   ├── repair_posted_at.py     # One-environment posted_at and job hash repair
 │   ├── report_top_skills.py    # CLI skill report
 │   └── run_live_etl.py         # CLI ETL runner (ingests all sources by default)
 ├── src/jobintel/
@@ -355,8 +368,10 @@ jobintel/
 │   │   ├── load_raw.py         # JSONL file loader
 │   │   ├── pipeline.py         # Orchestration layer
 │   │   ├── raw.py              # Raw job ingestion
+│   │   ├── repair.py           # posted_at and job hash data repair
 │   │   ├── skills.py           # Skill extraction
 │   │   └── transform.py        # Job normalization
+│   ├── retrieval/              # Deterministic job ranking (not yet used by the dashboard)
 │   ├── db.py                   # Database setup
 │   └── models.py               # SQLAlchemy models
 ├── tests/
@@ -377,7 +392,7 @@ jobintel/
 
 ## Testing
 
-The project maintains **48 tests** covering all core functionality.
+Tests run against in-memory or temporary SQLite databases, and source adapter tests mock HTTP, with one exception: `tests/test_sources_registry.py::test_source_fetch_signature` calls the live job board APIs.
 
 ```bash
 # Run all tests
@@ -389,8 +404,8 @@ pytest -v
 # Run specific test file
 pytest tests/test_etl_transform.py
 
-# Run with coverage
-pytest --cov=src/jobintel
+# Run without network access
+pytest --deselect tests/test_sources_registry.py::test_source_fetch_signature
 ```
 
 ### Test Categories
@@ -401,9 +416,12 @@ pytest --cov=src/jobintel
 | `test_bucket_expr.py` | Time bucket SQL for Postgres and SQLite |
 | `test_etl_*.py` | ETL pipeline component tests |
 | `test_sources_*.py` | Source adapter tests |
-| `test_environment_filtering.py` | Environment isolation guardrail tests |
+| `test_environment_filtering.py`, `test_environment_isolation.py` | Environment isolation guardrail tests |
 | `test_ingest_runs.py` | Pipeline observability tests |
 | `test_db_init.py` | Database initialization tests |
+| `test_migrations.py` | Alembic upgrade, downgrade, and round-trip tests |
+| `test_repair_posted_at.py` | posted_at and job hash repair tests |
+| `test_retrieval_*.py` | Deterministic ranking and retrieval tests |
 
 ---
 
@@ -418,7 +436,7 @@ pytest --cov=src/jobintel
 └─────────────────────┘     └──────────────────────┘     └─────────────────────┘
         ▲                                                         │
         │                                                         │
-    Users view                                              Every 6 hours:
+    Users view                                              Weekly/manual:
     analytics                                               - Fetch from APIs
                                                             - Transform & load
                                                             - Extract skills
@@ -436,6 +454,7 @@ pytest --cov=src/jobintel
    python -c "from jobintel.db import init_db; init_db()"
    alembic stamp head
    ```
+   `alembic upgrade head` cannot build the schema on an empty database, because the first revision expects the tables to exist already. `init_db()` falls back to creating the tables directly, and `alembic stamp head` then records them as current.
 
 ### 2. Dashboard Hosting (Streamlit Cloud)
 
@@ -452,7 +471,7 @@ pytest --cov=src/jobintel
 ### 3. Automated Ingestion (GitHub Actions)
 
 1. Add repository secret `DATABASE_URL` with your Neon connection string
-2. The workflow runs automatically every 6 hours
+2. The workflow runs automatically once a week (Sundays at 00:00 UTC)
 3. Manual trigger available in Actions tab → "Ingest Jobs" → "Run workflow"
 
 ### Database Migrations
@@ -485,7 +504,7 @@ streamlit run app/dashboard.py
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/description`)
 3. Make changes and add tests
-4. Run linting (`ruff check . && ruff format .`)
+4. Run linting (`ruff check .`)
 5. Run tests (`pytest`)
 6. Commit changes (`git commit -m "Add feature"`)
 7. Push to branch (`git push origin feature/description`)
