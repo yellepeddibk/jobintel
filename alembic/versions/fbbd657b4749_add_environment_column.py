@@ -1,7 +1,7 @@
 """add_environment_column
 
 Revision ID: fbbd657b4749
-Revises:
+Revises: 9bfae4d007ee
 Create Date: 2026-01-13 00:10:07.572108
 
 """
@@ -15,7 +15,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "fbbd657b4749"
-down_revision: str | Sequence[str] | None = None
+down_revision: str | Sequence[str] | None = "9bfae4d007ee"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -71,7 +71,10 @@ def upgrade() -> None:
             WHERE environment IS NULL
         """)
 
-        op.alter_column("raw_jobs", "environment", nullable=False)
+        # Batch mode so SQLite can apply NOT NULL: it has no ALTER COLUMN and rebuilds
+        # the table instead. PostgreSQL emits the same ALTER COLUMN as before.
+        with op.batch_alter_table("raw_jobs") as batch_op:
+            batch_op.alter_column("environment", existing_type=sa.String(), nullable=False)
 
     if not _has_index("raw_jobs", raw_idx):
         op.create_index(raw_idx, "raw_jobs", ["environment"], unique=False)
@@ -93,7 +96,8 @@ def upgrade() -> None:
             WHERE environment IS NULL
         """)
 
-        op.alter_column("ingest_runs", "environment", nullable=False)
+        with op.batch_alter_table("ingest_runs") as batch_op:
+            batch_op.alter_column("environment", existing_type=sa.String(), nullable=False)
 
     if not _has_index("ingest_runs", runs_idx):
         op.create_index(runs_idx, "ingest_runs", ["environment"], unique=False)
