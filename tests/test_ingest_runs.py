@@ -3,10 +3,13 @@
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.orm import sessionmaker
 
 from jobintel.db import SessionLocal, init_db
 from jobintel.etl.pipeline import run_ingest
-from jobintel.models import IngestRun
+from jobintel.models import IngestRun, Job
 
 
 @pytest.fixture(autouse=True)
@@ -114,3 +117,56 @@ def test_ingest_with_empty_search():
             run = session.query(IngestRun).order_by(IngestRun.id.desc()).first()
             assert run is not None
             assert run.search is None
+
+
+def _etl_with_flush_error(session, payloads, environment=None):
+    """Stand-in ETL that fails the way a constraint violation mid-ETL does."""
+    session.add(Job(title="no environment"))  # violates NOT NULL on flush
+    session.flush()
+
+
+def test_database_error_mid_etl_is_recorded_and_reraised(engine):
+    """A failed flush leaves the session needing a rollback before it can record."""
+    factory = sessionmaker(bind=engine)
+
+    with (
+        patch("jobintel.etl.pipeline.fetch_from_source", return_value=([], [])),
+        patch("jobintel.etl.pipeline.run_etl_from_payloads", side_effect=_etl_with_flush_error),
+    ):
+        with factory() as session:
+            # The original error, not a PendingRollbackError raised while recording it.
+            with pytest.raises(IntegrityError, match="NOT NULL"):
+                run_ingest(session, "remotive", "", 10, environment="test")
+            # The caller's session is usable again afterwards.
+            assert session.execute(select(1)).scalar() == 1
+
+    with factory() as s:
+        run = s.execute(select(IngestRun)).scalar_one()
+    assert run.status == "failed"
+    assert "NOT NULL" in run.error
+    assert run.finished_at is not None
+
+
+def test_original_error_survives_when_recording_the_failure_fails(engine, caplog):
+    """If the database cannot record the failure, the real cause still propagates."""
+    factory = sessionmaker(bind=engine)
+
+    with factory() as session:
+        real_commit = session.commit
+        commits = {"n": 0}
+
+        def commit_then_fail():
+            commits["n"] += 1
+            if commits["n"] > 1:  # the first commit creates the 'running' row
+                raise OperationalError("COMMIT", {}, Exception("database is unreachable"))
+            real_commit()
+
+        session.commit = commit_then_fail
+        with patch(
+            "jobintel.etl.pipeline.fetch_from_source", side_effect=ValueError("upstream down")
+        ):
+            with pytest.raises(ValueError, match="upstream down"):
+                run_ingest(session, "remotive", "", 10, environment="test")
+
+    assert "Could not record failed ingest run" in caplog.text
+    assert "database is unreachable" in caplog.text
