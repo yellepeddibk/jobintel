@@ -131,6 +131,9 @@ no Python default, no ORM `server_default`, and since revision `c4e81f6a2b57` no
 default either. A write that omits it fails on the `NOT NULL` constraint rather than being
 silently labelled production, which is the point. Do not reintroduce a default on this
 column in any of those three places to make a write path convenient; fix the write path.
+The same rule holds for `RawJob.environment` and `IngestRun.environment`: their Python
+defaults are gone, and revision `2e3a197ea25f` removed the database defaults that revision
+`fbbd657b4749` had left on them.
 
 The temporary `DEFAULT 'production'` that revision `7d2b1a4c9f30` added existed only to
 keep the previously deployed application inserting during the window between migrating the
