@@ -279,7 +279,7 @@ streamlit run app/dashboard.py
 
 **Scheduled (Production):**
 - GitHub Actions runs once a week (Sundays at 00:00 UTC) and can also be triggered manually
-- Each run applies migrations, then ingests Remotive, Arbeitnow, and RemoteOK in turn (up to 200 postings per source). If a source raises, the remaining sources are skipped for that run
+- Each run applies migrations, then ingests Remotive, Arbeitnow, and RemoteOK in turn (up to 200 postings per source). If a source raises, it is recorded as `failed`, its traceback is written to the job log, the remaining sources still run, and the run exits nonzero
 
 **Manual (CLI):**
 ```bash

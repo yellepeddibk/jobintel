@@ -6,6 +6,7 @@ Keeps pipeline behavior consistent across all entrypoints.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -145,6 +146,56 @@ def run_ingest(
         run.error = str(e)
         session.commit()
         raise
+
+
+@dataclass
+class SourceOutcome:
+    """What happened to one source in a multi-source ingest."""
+
+    source: str
+    result: IngestResult | None = None
+    error: Exception | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None
+
+
+def run_ingest_sources(
+    session_factory: Callable[[], Session],
+    sources: Sequence[str],
+    search: str,
+    limit: int,
+    environment: str | None = None,
+) -> list[SourceOutcome]:
+    """Run `run_ingest` for each source in order, continuing past failures.
+
+    A source that raises is recorded as failed by `run_ingest` and returned with its
+    exception; the remaining sources still run. Each source gets its own session, so
+    an error that leaves one session unusable cannot stop the sources after it.
+    Exceptions are returned, not re-raised: deciding how to report them and what exit
+    status to use belongs to the caller.
+
+    Args:
+        session_factory: Callable returning a new session, such as `SessionLocal`
+        sources: Source names, run in the order given
+        search: Search query string passed to every source
+        limit: Maximum number of jobs to fetch per source
+        environment: Environment tag (uses settings.ENV if None)
+
+    Returns:
+        One SourceOutcome per source, in the order given
+    """
+    outcomes: list[SourceOutcome] = []
+    for source in sources:
+        try:
+            with session_factory() as session:
+                result = run_ingest(session, source, search, limit, environment=environment)
+        except Exception as e:
+            outcomes.append(SourceOutcome(source=source, error=e))
+        else:
+            outcomes.append(SourceOutcome(source=source, result=result))
+    return outcomes
 
 
 def run_postprocess(session: Session, environment: str | None = None) -> tuple[int, int]:
