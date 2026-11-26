@@ -28,10 +28,23 @@ MAX_RETRIES = 3
 RETRY_BACKOFF_SECONDS = 5.0
 
 
-def _fetch_page_with_retry(page: int) -> dict[str, Any] | None:
+class ArbeitnowFetchError(RuntimeError):
+    """An Arbeitnow page could not be fetched, so the fetch as a whole has failed.
+
+    Raised rather than returning what was collected so far: a failed or partial
+    fetch must be recorded as a failed ingest run, never as a successful one with a
+    lower count.
+    """
+
+
+def _fetch_page_with_retry(page: int) -> dict[str, Any]:
     """Fetch a single page from Arbeitnow API with retry on 429.
 
-    Returns the JSON response dict, or None if all retries failed.
+    Returns the JSON response dict.
+
+    Raises:
+        ArbeitnowFetchError: the request failed, the response was not valid JSON,
+            or every attempt was rate limited.
     """
     for attempt in range(MAX_RETRIES):
         try:
@@ -54,13 +67,12 @@ def _fetch_page_with_retry(page: int) -> dict[str, Any] | None:
             resp.raise_for_status()
             return resp.json()
         except requests.RequestException as e:
-            logger.warning("Arbeitnow API request failed on page %d: %s", page, e)
-            return None
+            raise ArbeitnowFetchError(f"Arbeitnow page {page} failed: {e}") from e
         except ValueError as e:
-            logger.warning("Arbeitnow API returned invalid JSON on page %d: %s", page, e)
-            return None
-    logger.warning("Arbeitnow API exhausted retries on page %d", page)
-    return None
+            raise ArbeitnowFetchError(f"Arbeitnow page {page} returned invalid JSON: {e}") from e
+    raise ArbeitnowFetchError(
+        f"Arbeitnow page {page} still rate limited (429) after {MAX_RETRIES} attempts"
+    )
 
 
 def fetch_arbeitnow_jobs(search: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
@@ -72,6 +84,11 @@ def fetch_arbeitnow_jobs(search: str | None = None, limit: int = 100) -> list[di
 
     Returns:
         List of job payloads conforming to the canonical schema.
+
+    Raises:
+        ArbeitnowFetchError: any page needed to reach `limit` could not be fetched.
+            Pages already collected are discarded rather than returned as a
+            complete result.
     """
     payloads: list[dict[str, Any]] = []
     page = 1
@@ -79,8 +96,6 @@ def fetch_arbeitnow_jobs(search: str | None = None, limit: int = 100) -> list[di
 
     while page <= max_pages and len(payloads) < limit:
         data = _fetch_page_with_retry(page)
-        if data is None:
-            break
 
         jobs = data.get("data", [])
         if not jobs:
