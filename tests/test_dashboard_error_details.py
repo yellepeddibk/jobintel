@@ -51,7 +51,8 @@ def _fail_kpis(*args, **kwargs):
     raise RuntimeError(f"could not connect to {MARKER}")
 
 
-def _fail_init_db(*args, **kwargs):
+def _fail_connect(*args, **kwargs):
+    """Stands in for SessionLocal when the database cannot be reached."""
     raise RuntimeError(f'connection to server at "{MARKER}" failed')
 
 
@@ -77,7 +78,7 @@ def test_development_shows_query_exception_details(monkeypatch):
 
 
 def test_production_hides_connection_failure_details(monkeypatch):
-    monkeypatch.setattr(db, "init_db", _fail_init_db)
+    monkeypatch.setattr(db, "SessionLocal", _fail_connect)
 
     at = _render(monkeypatch, "production")
 
@@ -87,7 +88,7 @@ def test_production_hides_connection_failure_details(monkeypatch):
 
 
 def test_development_shows_connection_failure_details(monkeypatch):
-    monkeypatch.setattr(db, "init_db", _fail_init_db)
+    monkeypatch.setattr(db, "SessionLocal", _fail_connect)
 
     at = _render(monkeypatch, "development")
 
