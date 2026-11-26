@@ -43,7 +43,7 @@ def seed_jobs_with_times(session, times: list[datetime], environment: str = "tes
 
 
 class TestBucketExpr:
-    """Test the bucket_expr function for SQLite."""
+    """Test bucket_expr on whichever database the session fixture provides."""
 
     def test_bucket_6h_creates_4_buckets_per_day(self, session):
         """6h bucketing should create 4 distinct buckets per day (00, 06, 12, 18)."""
@@ -64,7 +64,7 @@ class TestBucketExpr:
         assert len(raw_jobs) >= 4, "Need at least 4 RawJob rows seeded for bucketing tests"
 
         # Query with bucket_expr for 6h
-        bucket_col = bucket_expr(RawJob.ingested_at, "6h", "sqlite")
+        bucket_col = bucket_expr(RawJob.ingested_at, "6h", session.bind.dialect.name)
         results = session.execute(
             select(bucket_col).where(RawJob.environment == "test").distinct()
         ).all()
@@ -85,7 +85,7 @@ class TestBucketExpr:
         seed_jobs_with_times(session, times, environment="test")
 
         # Query with bucket_expr for day
-        bucket_col = bucket_expr(RawJob.ingested_at, "day", "sqlite")
+        bucket_col = bucket_expr(RawJob.ingested_at, "day", session.bind.dialect.name)
         results = session.execute(
             select(bucket_col).where(RawJob.environment == "test").distinct()
         ).all()
@@ -106,7 +106,7 @@ class TestBucketExpr:
         seed_jobs_with_times(session, times, environment="test")
 
         # Query with bucket_expr for week
-        bucket_col = bucket_expr(RawJob.ingested_at, "week", "sqlite")
+        bucket_col = bucket_expr(RawJob.ingested_at, "week", session.bind.dialect.name)
         results = session.execute(
             select(bucket_col).where(RawJob.environment == "test").distinct()
         ).all()
