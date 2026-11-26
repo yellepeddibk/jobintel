@@ -408,6 +408,18 @@ pytest -v
 pytest tests/test_etl_transform.py
 ```
 
+### Running on PostgreSQL
+
+Production runs PostgreSQL, so CI also runs the suite with the shared database fixtures and the empty-database migration tests on a PostgreSQL 16 service container. To do the same locally, point `TEST_POSTGRES_URL` at a local database whose name starts with `jobintel_test`:
+
+```bash
+docker compose up -d db
+docker exec jobintel-db psql -U jobintel -d jobintel -c "CREATE DATABASE jobintel_test"
+TEST_POSTGRES_URL="postgresql+psycopg://jobintel:jobintel_dev_password@127.0.0.1:5433/jobintel_test" pytest
+```
+
+The tests drop and recreate tables in that database, and create and drop short-lived `jobintel_test_*` databases beside it. They refuse any URL that is not on `localhost` or `127.0.0.1`, or whose database name does not start with `jobintel_test`.
+
 ### Test Categories
 
 | Category | Description |

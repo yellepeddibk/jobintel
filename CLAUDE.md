@@ -138,8 +138,11 @@ database and deploying code that knew about the column. That rollout is complete
 
 ## Database
 
-- **SQLite and Postgres must both work.** Tests run on SQLite, production is Postgres.
-  Anything dialect-specific needs both branches and test coverage for both.
+- **SQLite and Postgres must both work.** Tests run on SQLite by default, production is
+  Postgres. Anything dialect-specific needs both branches and test coverage for both.
+  Setting `TEST_POSTGRES_URL` runs the shared `engine`/`session` fixtures and the
+  empty-database migration tests on Postgres; CI does this in its `test-postgres` job. Use
+  those fixtures, or the session's own dialect, rather than hard-coding one.
 - Schema changes go through an Alembic migration, never destructive DDL and never
   `create_all()`. Follow the style of the existing revisions.
 - Never point local development or a test run at the production `DATABASE_URL`. Several scripts

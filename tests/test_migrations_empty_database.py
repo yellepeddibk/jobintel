@@ -1,17 +1,21 @@
 """`alembic upgrade head` must build the full schema on an empty database.
 
-Runs Alembic against a temporary SQLite file. Before the baseline revision
-9bfae4d007ee existed, the chain began with a revision that altered tables nothing had
-created, so an empty database failed with NoSuchTableError.
+Runs Alembic against a temporary SQLite file, and also against a fresh PostgreSQL
+database when TEST_POSTGRES_URL is set. Before the baseline revision 9bfae4d007ee
+existed, the chain began with a revision that altered tables nothing had created, so
+an empty database failed with NoSuchTableError.
 """
 
 from __future__ import annotations
 
+import os
+import uuid
 from pathlib import Path
 
 import pytest
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
 from alembic import command
@@ -21,16 +25,50 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BASELINE = "9bfae4d007ee"
 TABLES = {"raw_jobs", "jobs", "job_skills", "ingest_runs"}
 
+# conftest.py validates this URL (local host, jobintel_test* name) before tests run.
+TEST_POSTGRES_URL = os.environ.get("TEST_POSTGRES_URL")
+DB_KINDS = ["sqlite"] + (["postgresql"] if TEST_POSTGRES_URL else [])
+
+
+@pytest.fixture(params=DB_KINDS)
+def make_database(request, tmp_path):
+    """Factory for empty databases of one kind, removed after the test.
+
+    SQLite databases are files in tmp_path. PostgreSQL databases are created on the
+    TEST_POSTGRES_URL server with a unique jobintel_test_ name and dropped afterwards.
+    """
+    created: list[str] = []
+    admin = None
+    if request.param == "postgresql":
+        admin = create_engine(make_url(TEST_POSTGRES_URL), isolation_level="AUTOCOMMIT")
+
+    def make(label: str) -> str:
+        if admin is None:
+            return f"sqlite+pysqlite:///{(tmp_path / f'{label}.db').as_posix()}"
+        name = f"jobintel_test_{label}_{uuid.uuid4().hex[:8]}"
+        with admin.connect() as conn:
+            conn.execute(text(f'CREATE DATABASE "{name}"'))
+        created.append(name)
+        return make_url(TEST_POSTGRES_URL).set(database=name).render_as_string(hide_password=False)
+
+    yield make
+
+    if admin is not None:
+        with admin.connect() as conn:
+            for name in created:
+                conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+        admin.dispose()
+
 
 @pytest.fixture
-def empty_db(tmp_path, monkeypatch):
-    """An empty SQLite file, plus an Alembic Config pointed at it.
+def empty_db(make_database, monkeypatch):
+    """An empty database, plus an Alembic Config pointed at it.
 
     Patches the settings singleton because alembic/env.py reads DATABASE_URL from it.
     """
     from jobintel.core import config as jobintel_config
 
-    url = f"sqlite+pysqlite:///{(tmp_path / 'empty.db').as_posix()}"
+    url = make_database("empty")
     monkeypatch.setattr(jobintel_config.settings, "DATABASE_URL", url, raising=False)
 
     # Config without an .ini file: env.py then skips fileConfig, which would otherwise
@@ -77,7 +115,7 @@ def test_upgrade_head_builds_an_empty_database(empty_db):
     assert version == command.ScriptDirectory.from_config(cfg).get_current_head()
 
 
-def test_migrated_schema_matches_the_models(empty_db, tmp_path):
+def test_migrated_schema_matches_the_models(empty_db, make_database):
     """Migrations and models must describe the same tables.
 
     Compares columns and nullability, keys, unique constraints, indexes and foreign
@@ -89,7 +127,7 @@ def test_migrated_schema_matches_the_models(empty_db, tmp_path):
     engine, cfg = empty_db
     command.upgrade(cfg, "head")
 
-    from_models = create_engine(f"sqlite+pysqlite:///{(tmp_path / 'models.db').as_posix()}")
+    from_models = create_engine(make_database("models"))
     Base.metadata.create_all(bind=from_models)
     try:
         assert _schema(engine) == _schema(from_models)

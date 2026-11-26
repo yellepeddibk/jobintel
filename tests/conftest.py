@@ -81,9 +81,61 @@ def _restore_streamlit_error_details():
     st_config.set_option("client.showErrorDetails", before)
 
 
+# Optional: when set, the shared `engine` fixture and the empty-database migration tests
+# run on this PostgreSQL server instead of SQLite. CI sets it in a separate job.
+TEST_POSTGRES_URL = os.environ.get("TEST_POSTGRES_URL")
+
+# Postgres sessions give up on a blocked lock instead of hanging the run, for example
+# if a test leaves a transaction open while the next one drops the tables.
+POSTGRES_CONNECT_ARGS = {"options": "-c lock_timeout=10000"}
+
+
+def check_test_postgres_url(url: str) -> None:
+    """Refuse any test database that is not local and clearly named for tests.
+
+    The fixtures drop and recreate tables and whole databases, so this is what stops
+    a mistyped or copied URL from pointing them at a real database.
+    """
+    from sqlalchemy.engine import make_url
+
+    parsed = make_url(url)
+    problems = []
+    if not parsed.drivername.startswith("postgresql"):
+        problems.append("it is not a PostgreSQL URL")
+    if parsed.host not in ("localhost", "127.0.0.1"):
+        problems.append(f"host {parsed.host!r} is not localhost or 127.0.0.1")
+    if not (parsed.database or "").startswith("jobintel_test"):
+        problems.append(f"database {parsed.database!r} does not start with 'jobintel_test'")
+    if problems:
+        raise pytest.UsageError("Refusing TEST_POSTGRES_URL: " + "; ".join(problems) + ".")
+
+
+def pytest_configure(config):
+    if TEST_POSTGRES_URL:
+        check_test_postgres_url(TEST_POSTGRES_URL)
+
+
+def pytest_report_header(config):
+    if TEST_POSTGRES_URL:
+        return "database fixtures: PostgreSQL (TEST_POSTGRES_URL)"
+    return "database fixtures: SQLite"
+
+
 @pytest.fixture
 def engine():
-    """Create a fresh in-memory SQLite engine for each test."""
+    """A fresh, empty schema for each test.
+
+    In-memory SQLite by default. With TEST_POSTGRES_URL set, the tables are dropped and
+    recreated in that database instead, so each test still starts empty.
+    """
+    if TEST_POSTGRES_URL:
+        eng = create_engine(TEST_POSTGRES_URL, connect_args=POSTGRES_CONNECT_ARGS)
+        Base.metadata.drop_all(bind=eng)
+        Base.metadata.create_all(bind=eng)
+        yield eng
+        eng.dispose()
+        return
+
     eng = create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(bind=eng)
     yield eng
