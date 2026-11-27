@@ -43,9 +43,9 @@ class Job(Base):
     # Environment the raw row this job was normalized from was ingested under.
     # No Python default and no server_default on purpose: every writer must state
     # the environment, so a path that forgets fails loudly instead of silently
-    # being labelled production. The production database still carries a temporary
-    # DEFAULT 'production' from revision 7d2b1a4c9f30, which a later contract
-    # revision removes; nothing here may depend on it.
+    # being labelled production. The temporary database DEFAULT 'production' that
+    # revision 7d2b1a4c9f30 added was removed by revision c4e81f6a2b57, so there is
+    # no database default either.
     environment: Mapped[str] = mapped_column(String, nullable=False)
     title: Mapped[str] = mapped_column(String, nullable=False)
     company: Mapped[str | None] = mapped_column(String, nullable=True)

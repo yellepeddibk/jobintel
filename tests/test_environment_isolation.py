@@ -88,10 +88,10 @@ def jobs_by_env(session) -> dict[str, list[Job]]:
 def test_orm_created_schema_has_no_default_for_job_environment(engine):
     """A database built from the model must not silently label rows production.
 
-    The production database still carries a temporary DEFAULT 'production' from
-    the expand migration, removed in the contract step. The model must never
-    declare one, so a writer that forgets an environment fails instead of being
-    quietly attributed to production.
+    The expand migration added a temporary database DEFAULT 'production', which the
+    contract revision c4e81f6a2b57 removed. The model must never declare one, so a
+    writer that forgets an environment fails instead of being quietly attributed to
+    production.
     """
     column = next(c for c in inspect(engine).get_columns("jobs") if c["name"] == "environment")
     assert column["default"] is None
