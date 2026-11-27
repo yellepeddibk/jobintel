@@ -129,6 +129,36 @@ def test_limit_caps_results_without_a_search(mock_get):
     assert [p["external_id"] for p in payloads] == ["0", "1", "2"]
 
 
+def _mixed_jobs():
+    """Three non-matching jobs first, then three Python jobs."""
+    other = [
+        {"id": f"o{i}", "url": f"https://remoteok.com/o{i}", "position": "Marketing Lead"}
+        for i in range(3)
+    ]
+    python = [
+        {"id": f"p{i}", "url": f"https://remoteok.com/p{i}", "position": "Python Engineer"}
+        for i in range(3)
+    ]
+    return [METADATA, *other, *python]
+
+
+def test_search_is_applied_before_the_limit(mock_get):
+    """The limit counts matching jobs, not the first jobs in the response."""
+    mock_get.return_value = _response(_mixed_jobs())
+
+    payloads = fetch_remoteok_jobs(search="python", limit=2)
+
+    assert [p["external_id"] for p in payloads] == ["p0", "p1"]
+
+
+def test_search_returns_every_match_when_under_the_limit(mock_get):
+    mock_get.return_value = _response(_mixed_jobs())
+
+    payloads = fetch_remoteok_jobs(search="python", limit=50)
+
+    assert [p["external_id"] for p in payloads] == ["p0", "p1", "p2"]
+
+
 def test_sends_user_agent_and_timeout(mock_get):
     mock_get.return_value = _response([METADATA])
 
