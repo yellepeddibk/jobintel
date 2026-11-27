@@ -4,32 +4,11 @@ Revision ID: 9bfae4d007ee
 Revises:
 Create Date: 2026-11-26 00:00:00.000000
 
-Baseline revision: the four tables as they existed before Alembic was introduced.
+Baseline: creates the four pre-Alembic tables (schema from `jobintel.models` at
+772d6e6^), so an empty database can be built by migrations alone.
 
-The tables were first created with `create_all()`, and the first Alembic revision,
-fbbd657b4749, was written to alter those existing tables. Nothing in the chain created
-them, so `alembic upgrade head` failed on an empty database with NoSuchTableError.
-This revision is now the root of the chain and creates them, so an empty database can
-be built by migrations alone.
-
-The definitions are the schema `create_all()` produced from `jobintel.models` at
-commit 772d6e6^, immediately before fbbd657b4749 was added: no `environment` column
-anywhere, and global `UNIQUE(url)` and `UNIQUE(hash)` on `jobs`, left unnamed as
-`unique=True` emitted them. The later revisions find those constraints by their
-columns, not their names, so this matches what they expect on both dialects.
-
-Each table is created only if it does not already exist. A database that already has
-the tables, whether or not it was ever stamped, is left exactly as it was, which is
-the situation fbbd657b4749 was written for.
-
-Databases already stamped at a later revision are unaffected: Alembic treats every
-ancestor of the stamped revision as applied and never runs this one against them.
-
-Downgrade refuses. Because upgrade skips tables that already exist, this revision may
-not have created the tables it would drop, and dropping them would delete every row.
-
-No application module is imported here. Migrations must keep behaving the same way
-years from now, which they cannot do if they call into code that is free to change.
+Skips tables that already exist. Downgrade refuses, since this revision may not have
+created the tables it would drop.
 """
 
 from collections.abc import Sequence

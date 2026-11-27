@@ -37,20 +37,10 @@ def _has_index(table: str, index: str) -> bool:
 
 
 def upgrade() -> None:
-    """Add environment column with safe migration for existing data.
+    """Add environment to raw_jobs and ingest_runs, backfill, set NOT NULL, index. Idempotent.
 
-    Strategy:
-    1. Check if column already exists (idempotent)
-    2. Add column as nullable with server_default
-    3. Backfill existing rows (legacy: 'sample' source → 'test', others → 'production')
-    4. Make column NOT NULL
-    5. Create index
-
-    Note: The 'sample' source handling is legacy behavior from when sample data
-    existed in the project. Sample data has since been removed, but this migration
-    preserves the original backfill logic for historical database compatibility.
+    Backfill tags the legacy 'sample' source as 'test' and everything else 'production'.
     """
-    # Compute index names once for consistent checks
     raw_idx = op.f("ix_raw_jobs_environment")
     runs_idx = op.f("ix_ingest_runs_environment")
 
@@ -61,7 +51,6 @@ def upgrade() -> None:
             sa.Column("environment", sa.String(), nullable=True, server_default="production"),
         )
 
-        # Backfill: tag 'sample' source as 'test' environment, all others as 'production'
         op.execute("""
             UPDATE raw_jobs
             SET environment = CASE
@@ -71,8 +60,7 @@ def upgrade() -> None:
             WHERE environment IS NULL
         """)
 
-        # Batch mode so SQLite can apply NOT NULL: it has no ALTER COLUMN and rebuilds
-        # the table instead. PostgreSQL emits the same ALTER COLUMN as before.
+        # Batch mode: SQLite rebuilds the table to set NOT NULL; Postgres alters in place.
         with op.batch_alter_table("raw_jobs") as batch_op:
             batch_op.alter_column("environment", existing_type=sa.String(), nullable=False)
 
@@ -86,7 +74,6 @@ def upgrade() -> None:
             sa.Column("environment", sa.String(), nullable=True, server_default="production"),
         )
 
-        # Backfill: tag 'sample' source as 'test' environment, all others as 'production'
         op.execute("""
             UPDATE ingest_runs
             SET environment = CASE
@@ -105,7 +92,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Remove environment columns (idempotent)."""
-    # Compute index names once for consistent checks
     raw_idx = op.f("ix_raw_jobs_environment")
     runs_idx = op.f("ix_ingest_runs_environment")
 
