@@ -30,7 +30,12 @@ def fetch_remoteok_jobs(
     jobs = data[1:] if isinstance(data, list) and len(data) > 1 else []
 
     payloads: list[dict[str, Any]] = []
-    for j in jobs[:limit]:
+    for j in jobs:
+        # The limit counts matching jobs, so it is checked here rather than by
+        # slicing the response, which would apply it before the search filter.
+        if len(payloads) >= limit:
+            break
+
         # Normalize RemoteOK fields to our standard format
         url = j.get("url") or f"https://remoteok.com/remote-jobs/{j.get('id')}"
         title = j.get("position") or j.get("title") or ""
