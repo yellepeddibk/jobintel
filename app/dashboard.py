@@ -22,24 +22,18 @@ from jobintel.etl.pipeline import run_ingest
 from jobintel.etl.sources.registry import list_sources
 from jobintel.models import IngestRun, Job, JobSkill, RawJob
 
-# Use production environment filter in prod, else use current ENV setting
 DATA_ENV = "production" if settings.is_production else settings.ENV
 
-# Operator controls (ingest form, cache clearing, debug config) write to the database,
-# affect every viewer, or reveal connection details. The production dashboard is public
-# and has no authentication, so they render only outside production. Production
-# ingestion runs from the scheduled GitHub Actions workflow instead.
+# The production site is public with no login, so operator controls only render locally.
 OPERATOR_CONTROLS = not settings.is_production
 
 logger = logging.getLogger(__name__)
 
 
 def show_error(message: str, exc: Exception) -> None:
-    """Show a failure without exposing exception details on the public dashboard.
+    """Show `message`; the exception goes to the server log in production, on screen elsewhere.
 
-    Exception text can carry connection details (database errors name the host and
-    port) or SQL. In production the viewer sees only `message` and the full exception
-    goes to the server log. Elsewhere the exception and traceback are shown as well.
+    Exception text can contain connection details or SQL.
     """
     st.error(message)
     if settings.is_production:
@@ -50,18 +44,13 @@ def show_error(message: str, exc: Exception) -> None:
 
 st.set_page_config(page_title="JobIntel Dashboard", layout="wide")
 
-# Uncaught exceptions bypass show_error, so in production Streamlit itself is told to
-# render only a generic message for them.
+# Uncaught exceptions bypass show_error.
 if settings.is_production:
     st.set_option("client.showErrorDetails", "none")
 st.title("JobIntel Dashboard")
 st.caption("Job board ingestion → normalize → extract skills → analytics")
 
-# Outside production, say plainly which environment this is, and warn loudly if the
-# session is pointed at a database that is not on this machine (such as production).
-# Database details otherwise live in the sidebar's Debug Config panel. Shown before
-# the connection check so it is visible even when the connection fails. The public
-# site shows nothing here.
+# Before the connection check, so it shows even when the connection fails.
 if OPERATOR_CONTROLS:
     st.info(f"**{settings.ENV.capitalize()} environment**", icon="🛠️")
     if not is_local_database(settings.DATABASE_URL):
@@ -72,28 +61,21 @@ if OPERATOR_CONTROLS:
             icon="⚠️",
         )
 
-# Debug: show exactly what config the dashboard is using
 if OPERATOR_CONTROLS:
     with st.sidebar.expander("🔧 Debug Config", expanded=False):
         st.write("**settings.ENV:**", settings.ENV)
         st.write("**DATA_ENV:**", DATA_ENV)
         db_url = settings.DATABASE_URL
-        # Mask password in display
         safe_db = db_url
-        if "@" in db_url:
-            # Mask everything between : and @ after //
+        if "@" in db_url:  # mask the password
             import re as _re
             safe_db = _re.sub(r"(://[^:]+:)[^@]+(@)", r"\1***\2", db_url)
         st.write("**DATABASE_URL:**", safe_db)
 
-# Check the database is reachable, surfacing a failure in the UI. Outside production,
-# also create any missing tables for quick local setup. In production the schema
-# belongs to Alembic, applied by the scheduled workflow: the public dashboard only
-# reads, so it never changes the database structure.
+# In production, Alembic owns the schema; the public dashboard never changes it.
 try:
     if not settings.is_production:
         init_db()
-    # Test DB connection immediately
     with SessionLocal() as test_session:
         test_session.execute(select(1))
     st.success("✓ Database connected")
@@ -122,12 +104,10 @@ except Exception as e:
 
 
 def strip_html_tags(text: str) -> str:
-    """Remove HTML tags from text for better readability."""
+    """Remove HTML tags and collapse whitespace."""
     if not text:
         return ""
-    # Remove HTML tags
     clean = re.sub(r"<[^>]+>", "", text)
-    # Replace multiple whitespace with single space
     clean = re.sub(r"\s+", " ", clean)
     return clean.strip()
 
@@ -154,7 +134,6 @@ def get_skill_choices(environment: str, limit: int = 200) -> list[str]:
     """Get list of skills from specified environment."""
     try:
         with SessionLocal() as s:
-            # Environment comes from the job itself; no raw join needed.
             rows = s.execute(
                 select(JobSkill.skill)
                 .join(Job, Job.id == JobSkill.job_id)
@@ -182,29 +161,21 @@ def get_latest_jobs(
     """Get latest jobs from specified environment."""
     try:
         with SessionLocal() as s:
-            # Environment gate is Job.environment. Source and ingested_at come from
-            # the job's authoritative raw row (lowest id for this environment and
-            # url), which is the row transform normalized it from. Joining raw rows
-            # by URL alone would show a job once per raw version, and .distinct()
-            # does not collapse those because the source column is what differs.
+            # One raw row per job; a plain URL join would repeat jobs with several.
             raw = authoritative_raw_jobs()
             q = s.query(Job, raw.c.source.label("source")).join(raw, job_raw_onclause(raw))
 
             q = q.filter(Job.environment == environment)
 
-            # Filter by date (posted_at or ingested_at as fallback)
             if days_back:
                 cutoff_date = date.today() - timedelta(days=days_back)
                 date_expr = func.coalesce(Job.posted_at, raw.c.ingested_at)
                 q = q.filter(date_expr >= cutoff_date)
 
-            # Filter by location: US/USA/United States selects US locations,
-            # anything else is a substring match.
             if location_filter:
                 if is_us_query(location_filter):
                     q = q.filter(us_location_clause(Job.location))
                 else:
-                    # Regular substring match for other locations
                     q = q.filter(Job.location.ilike(f"%{location_filter}%"))
 
             if keyword:
@@ -241,7 +212,6 @@ def get_latest_jobs(
 
             data = []
             for job, source in rows:
-                # Get full description and strip HTML
                 full_desc = strip_html_tags(job.description or "")
 
                 data.append(
@@ -268,12 +238,10 @@ with st.sidebar:
     if OPERATOR_CONTROLS:
         st.header("Controls")
 
-        # Cache control with visual feedback
         if st.button("🗑️ Clear cache", help="Clear cached data to refresh all views"):
             st.cache_data.clear()
             st.cache_resource.clear()
 
-            # Clear UI state for a complete reset feel
             for key in list(st.session_state.keys()):
                 if key.startswith(("jobs_sources", "jobs_skills", "jobs_keyword")):
                     del st.session_state[key]
@@ -285,7 +253,6 @@ with st.sidebar:
             ingest_query = st.text_input("Search", value="engineer")
             ingest_limit = st.number_input("Limit", min_value=1, max_value=500, value=50, step=10)
 
-            # Get available sources from registry
             try:
                 available_sources = list_sources()
             except Exception as e:
@@ -306,7 +273,6 @@ with st.sidebar:
                                 session, ingest_source, ingest_query, int(ingest_limit)
                             )
 
-                            # Show warnings if any payloads were invalid
                             for warning in result.warnings:
                                 st.warning(warning)
 
@@ -316,7 +282,6 @@ with st.sidebar:
                             f"inserted_skills={result.inserted_skills}"
                         )
 
-                    # Refresh cached queries after ingest
                     st.cache_data.clear()
                     st.rerun()
                 except Exception as e:
@@ -472,7 +437,6 @@ with tab_analytics:
                 )
 
             if skills_by_source:
-                # Create a comparison dataframe
                 all_skills = set()
                 for source_skills in skills_by_source.values():
                     all_skills.update(skill for skill, _ in source_skills)
@@ -514,7 +478,6 @@ with tab_analytics:
 
     try:
         with SessionLocal() as s:
-            # Get top 5 skills to show trends for
             top_5_skills = get_top_skills(
                 s,
                 source=source_filter,
@@ -537,15 +500,13 @@ with tab_analytics:
                 )
 
                 if trends_data:
-                    # Convert to DataFrame and prepare for charting
                     trends_df = pd.DataFrame(trends_data)
                     trends_df = trends_df.sort_values("bucket")
 
-                    # Convert bucket to datetime when possible for proper x-axis ordering
+                    # Datetime buckets so the x-axis orders correctly.
                     trends_df["bucket"] = pd.to_datetime(trends_df["bucket"], errors="coerce")
 
                     if not trends_df.empty:
-                        # Check if we have only one bucket (single time point)
                         unique_buckets = trends_df["bucket"].nunique()
                         if unique_buckets == 1:
                             st.warning(
@@ -595,7 +556,6 @@ with tab_jobs:
         )
 
         if not jobs_df.empty:
-            # Display table without description_full and id
             display_df = jobs_df.drop(columns=["id", "description_full"], errors="ignore")
             st.dataframe(
                 display_df,
@@ -648,10 +608,9 @@ with tab_jobs:
                 }
                 st.json(meta)
 
-                # Show full description with Show More/Less toggle
                 description_full = row.get("description_full") or ""
                 if description_full:
-                    # Use stable job ID for session state keys
+                    # Keyed by job id so state survives reruns.
                     show_key = f"show_full_{job_id}"
                     more_key = f"more_{job_id}"
                     less_key = f"less_{job_id}"
@@ -659,7 +618,6 @@ with tab_jobs:
                     if show_key not in st.session_state:
                         st.session_state[show_key] = False
 
-                    # Show preview or full based on state
                     preview_length = 500
                     if len(description_full) > preview_length:
                         if st.session_state[show_key]:
@@ -698,16 +656,13 @@ with tab_runs:
         if runs:
             runs_data = []
             for run in runs:
-                # Calculate duration
                 duration = ""
                 if run.finished_at and run.started_at:
                     delta = run.finished_at - run.started_at
                     duration = f"{delta.total_seconds():.1f}s"
 
-                # Count warnings
                 warnings_count = len(run.warnings) if run.warnings else 0
 
-                # Status emoji
                 status_emoji = {
                     "success": "✅",
                     "failed": "❌",
@@ -733,7 +688,6 @@ with tab_runs:
             runs_df = pd.DataFrame(runs_data)
             st.dataframe(runs_df, hide_index=True, width="stretch")
 
-            # Show details for failed runs
             failed_runs = [r for r in runs if r.status == "failed"]
             if failed_runs:
                 st.markdown("### Failed Runs Details")
@@ -742,13 +696,11 @@ with tab_runs:
                         f"❌ {run.source} - {run.started_at.strftime('%Y-%m-%d %H:%M:%S')}"
                     ):
                         if settings.is_production:
-                            # Stored error text is an exception string and can include
-                            # SQL or connection details; the workflow log has it in full.
+                            # May contain SQL or connection details; see the workflow log.
                             st.error("Error details are in the ingestion workflow logs.")
                         else:
                             st.error(run.error or "No error message recorded")
 
-            # Show runs with warnings
             warning_runs = [r for r in runs if r.warnings]
             if warning_runs:
                 st.markdown("### Runs with Warnings")

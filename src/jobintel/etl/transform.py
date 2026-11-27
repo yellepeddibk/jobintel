@@ -12,28 +12,14 @@ from jobintel.models import Job, RawJob
 
 
 def _safe_date(v: Any) -> date | None:
-    """Normalize whatever a source put in `posted_at` to a date, or None.
+    """Parse an adapter's `posted_at` to a date, or None.
 
-    Every adapter emits a datetime rather than a bare date: arbeitnow an
-    isoformat() of a Unix timestamp, remotive the upstream publication_date, and
-    remoteok either an ISO datetime or a raw epoch. `date.fromisoformat` rejects
-    all of those, so this previously returned None for effectively every real
-    posting, leaving `posted_at` NULL and collapsing the date component of
-    `job_hash` to an empty string.
-
-    Accepted, in this order: date and datetime objects, Unix epoch numbers,
-    bare ISO dates, ISO datetimes (with or without an offset, a trailing Z, or a
-    space separator), and numeric epoch strings. Anything else is None.
-
-    bool is rejected explicitly. It is a subclass of int, so without this True
-    would be read as the epoch and silently become 1970-01-01.
-
-    Epoch values are interpreted as UTC, matching how arbitrarily-timezoned
-    upstream timestamps are already flattened to a date elsewhere.
+    Accepts dates, datetimes, epoch numbers (UTC), ISO dates and datetimes (with or
+    without offset or Z), and numeric epoch strings.
     """
     if v is None or v == "":
         return None
-    if isinstance(v, bool):
+    if isinstance(v, bool):  # bool is an int; would otherwise parse as 1970-01-01
         return None
     if isinstance(v, datetime):
         return v.date()
@@ -52,9 +38,7 @@ def _safe_date(v: Any) -> date | None:
         return date.fromisoformat(s)
     except ValueError:
         pass
-    # fromisoformat gained broad ISO 8601 support in 3.11 but still will not take
-    # a trailing Z, so normalize that one spelling to an explicit UTC offset.
-    try:
+    try:  # fromisoformat rejects a trailing Z
         return datetime.fromisoformat(s.replace("Z", "+00:00")).date()
     except ValueError:
         pass
@@ -84,26 +68,13 @@ def job_hash(
 
 
 def transform_jobs(session: Session, environment: str | None = None) -> int:
-    """Normalize raw jobs into `jobs` for exactly one environment.
+    """Normalize one environment's raw rows into `jobs`, skipping known URLs and hashes.
 
-    Args:
-        session: SQLAlchemy session.
-        environment: Environment to process. None resolves to settings.ENV, which
-            matches upsert_raw_job and the rest of the pipeline. There is
-            deliberately no all-environments mode: a caller that wants several
-            loops over them explicitly, so the environment a row is written with
-            is always a stated decision rather than a side effect.
-
-    Only raw rows tagged with the resolved environment are read, and every job
-    created is written with that same environment. Deduplication by URL and by
-    normalized hash is scoped to it too, so the same posting may exist once per
-    environment while a repeat within one environment is still suppressed.
+    No all-environments mode: callers loop, so each environment is a stated choice.
     """
     env = environment or settings.ENV
 
-    # Seed seen sets from existing rows in THIS environment, for idempotency
-    # across runs. Scoping matters as much as the raw filter below: seeding
-    # globally would let one environment's jobs suppress another's.
+    # Seed from this environment only, so one environment cannot suppress another.
     existing = session.execute(
         select(Job.url, Job.hash).where(Job.environment == env)
     ).all()
@@ -112,9 +83,7 @@ def transform_jobs(session: Session, environment: str | None = None) -> int:
 
     inserted = 0
 
-    # Ordered by id so which raw row wins is deterministic rather than dependent
-    # on the query plan. Analytics resolves a job's raw metadata by the same rule
-    # (lowest id for the environment and url), so content and metadata agree.
+    # Lowest id wins, matching how analytics resolves a job's raw metadata.
     raw_rows = (
         session.execute(
             select(RawJob).where(RawJob.environment == env).order_by(RawJob.id)
@@ -137,7 +106,6 @@ def transform_jobs(session: Session, environment: str | None = None) -> int:
 
         h = job_hash(title, company, location, posted_at)
 
-        # Dedup within this run + across prior runs.
         if url in seen_urls or h in seen_hashes:
             continue
 

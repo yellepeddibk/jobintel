@@ -1,21 +1,7 @@
-"""One-time data repair: backfill Job.posted_at and recompute Job.hash.
+"""Backfill Job.posted_at from the authoritative raw row and recompute Job.hash.
 
-Why this exists. `_safe_date` used to reject the datetime strings every adapter
-emits, so normalized jobs were written with `posted_at = NULL` and a `job_hash`
-whose date component was an empty string. Fixing the parser corrects new rows but
-leaves the existing ones inconsistent: their stored dates are missing and their
-hashes were computed from an input the parser would no longer produce.
-
-This module makes the existing rows internally consistent. It deliberately does
-**not** call `transform_jobs`. Materializing postings that the broken hash was
-suppressing is the normal pipeline's job, run separately and afterwards, so that a
-historical correction and an ingestion run never share a blast radius.
-
-The repair is planned in full before anything is written. `plan_repair` is
-read-only and returns the complete proposed state; `apply_repair` refuses to write
-unless that plan is internally consistent. Nothing here relies on counts measured
-during an earlier audit: every check is recomputed against the database in front of
-it at execution time.
+Fixes rows written before `_safe_date` parsed adapter datetimes. Planned and verified
+in full before writing. Never runs `transform_jobs`; run the pipeline separately.
 """
 
 from __future__ import annotations
@@ -26,8 +12,7 @@ from datetime import date
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-# The repair must normalize dates exactly as the pipeline does, so it imports the
-# pipeline's parser rather than carrying a copy that could drift from it.
+# Reuse the pipeline's parser so the repair cannot drift from it.
 from jobintel.etl.transform import _safe_date, job_hash
 from jobintel.models import Job, RawJob
 
@@ -118,13 +103,7 @@ class RepairResult:
 
 
 def resolve_authoritative_raw(session: Session, environment: str) -> dict[str, RawJob]:
-    """Map each URL in one environment to its authoritative raw row.
-
-    The authoritative row is the lowest `raw_jobs.id` sharing the environment and
-    URL, which is the row `transform_jobs` normalized the job from and the same row
-    `analytics.queries.authoritative_raw_jobs()` reports metadata from. Ordering by
-    id ascending and keeping the first sighting expresses exactly that rule.
-    """
+    """Map each URL in one environment to its lowest-id raw row (the job's source row)."""
     authoritative: dict[str, RawJob] = {}
     rows = session.execute(
         select(RawJob).where(RawJob.environment == environment).order_by(RawJob.id)
@@ -139,12 +118,10 @@ def resolve_authoritative_raw(session: Session, environment: str) -> dict[str, R
 
 
 def plan_repair(session: Session, environment: str) -> RepairPlan:
-    """Compute the full proposed state for one environment. Reads only.
+    """Compute the proposed state for one environment without writing.
 
-    Raises UnresolvedAuthoritativeRawJob if a job carries a URL with no raw row
-    behind it. A job with no URL cannot be resolved by the authoritative rule and
-    is left with its current posted_at; its hash is still recomputed, which is a
-    no-op unless its stored hash had drifted from its own columns.
+    Raises UnresolvedAuthoritativeRawJob if a job's URL has no raw row. Jobs without a
+    URL keep their posted_at; their hash is still recomputed.
     """
     if not environment:
         raise ValueError("environment is required and must not be empty")
@@ -196,12 +173,9 @@ def plan_repair(session: Session, environment: str) -> RepairPlan:
 
 
 def verify_plan(plan: RepairPlan) -> None:
-    """Prove the proposed state satisfies the table's unique constraints.
+    """Raise if the proposed state would break either unique constraint.
 
-    Raises before any write. URLs are not modified by the repair, but they are
-    checked anyway: a plan that would violate uq_jobs_environment_url means the
-    starting data already did, and that should stop the repair rather than be
-    discovered halfway through it.
+    URLs are not changed, but are checked so pre-existing duplicates stop the repair.
     """
     hash_owners: dict[str, list[int]] = {}
     url_owners: dict[str, list[int]] = {}
@@ -236,24 +210,10 @@ def apply_repair(
     *,
     dry_run: bool = True,
 ) -> RepairResult:
-    """Plan, verify, then optionally write. One environment, all or nothing.
+    """Plan, verify, then write unless dry_run. One environment, one transaction.
 
-    `environment` is required and has no default: a data correction must never
-    fall back to production because an argument was omitted.
-
-    With dry_run=True (the default) nothing is written and the session is left
-    unchanged, so the result can be inspected safely against any database.
-
-    Writing happens in two passes inside a single transaction. Rewriting hashes
-    row by row can transiently violate uq_jobs_environment_hash even when the final
-    state is clean, because one row's new hash may equal another row's old hash, and
-    PostgreSQL checks unique constraints per statement rather than deferring them.
-    Clearing the hashes first removes every such intermediate conflict; NULLs are
-    distinct under a unique constraint. Both passes are in one transaction, so no
-    other reader observes the cleared state and a failure rolls the whole thing back.
-
-    Re-running after a successful repair is a no-op: the plan proposes what is
-    already stored, nothing is marked as changing, and no statement is issued.
+    `environment` has no default so a repair can never fall back to production.
+    Re-running after a successful repair is a no-op.
     """
     plan = plan_repair(session, environment)
     verify_plan(plan)
@@ -272,14 +232,13 @@ def apply_repair(
         return result
 
     try:
-        # Pass 1: clear the hashes being rewritten, so no intermediate state can
-        # collide with a hash that is about to move.
+        # Clear changing hashes first: Postgres checks uniqueness per statement, so a
+        # new hash could otherwise collide with another row's old one mid-update.
         session.execute(
             update(Job)
             .where(Job.id.in_([p.job_id for p in changing if p.hash_changes]))
             .values(hash=None)
         )
-        # Pass 2: write the final values, in deterministic job id order.
         for p in sorted(changing, key=lambda x: x.job_id):
             session.execute(
                 update(Job)

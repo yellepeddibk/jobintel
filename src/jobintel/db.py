@@ -14,7 +14,7 @@ ALEMBIC_INI = PROJECT_ROOT / "alembic.ini"
 
 
 def _connect_args(url: str) -> dict[str, Any]:
-    # SQLite needs this, Postgres must NOT receive it
+    # SQLite only; Postgres rejects it.
     if url.startswith("sqlite"):
         return {"check_same_thread": False}
     return {}
@@ -30,13 +30,9 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 
 def init_db() -> None:
-    """Prepare the database schema. Safe to call more than once.
+    """Prepare the schema: Alembic in production (errors propagate), create_all() elsewhere.
 
-    Production: runs Alembic migrations to head, and any error propagates. There is
-    deliberately no create_all() fallback: it would hide the failure, leave pending
-    schema changes unapplied, and create tables Alembic has no record of.
-
-    Development and test: create_all() for quick local setup.
+    No create_all() fallback in production: it would hide failed migrations.
     """
     if settings.is_production:
         _upgrade_to_head()

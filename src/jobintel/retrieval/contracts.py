@@ -1,14 +1,7 @@
-"""Frozen contracts for deterministic retrieval.
+"""Immutable, serializable query and result types for retrieval.
 
-Everything a caller passes in and everything retrieval hands back is an immutable
-dataclass with a `to_dict()`, so a query and its result serialize losslessly. That
-matters beyond tidiness: the later evaluation and tracing work needs a retrieval run
-to be a value it can store and replay, not an object graph tied to a session.
-
-The query separates ranking preferences from hard filters by name. `preferred_*`
-fields only move a job up or down; `required_*` fields, `remote_only`, `sources` and
-`posted_within_days` decide whether a job is a candidate at all and never touch the
-score. One field never does both jobs.
+`preferred_*` fields only affect the score; `required_*`, `remote_only`, `sources` and
+`posted_within_days` only filter. No field does both.
 """
 
 from __future__ import annotations
@@ -19,7 +12,7 @@ from typing import Any
 
 from jobintel.etl.skills import known_skills
 
-# Component names, in the fixed order they appear in every ScoreBreakdown.
+# In ScoreBreakdown order.
 TEXT = "text"
 SKILLS = "skills"
 LOCATION = "location"
@@ -36,15 +29,7 @@ def _clean_optional_text(value: str | None) -> str | None:
 
 
 def _normalize_skills(values: tuple[str, ...], label: str) -> tuple[str, ...]:
-    """Lowercase, drop blanks, deduplicate, sort, and validate against the vocabulary.
-
-    Sorted rather than input-ordered so two queries that differ only in the order
-    skills were listed are the same query, which keeps traces comparable.
-
-    Unknown names raise instead of being dropped: silently ignoring a skill the
-    extractor cannot produce would yield an empty filter or a permanently
-    unreachable score component, and the caller would have no way to tell.
-    """
+    """Lowercase, de-duplicate and sort; raise on skills extraction can never produce."""
     cleaned = {v.strip().lower() for v in values if v and v.strip()}
     vocabulary = known_skills()
     unknown = sorted(cleaned - vocabulary)
@@ -58,12 +43,7 @@ def _normalize_skills(values: tuple[str, ...], label: str) -> tuple[str, ...]:
 
 
 def _normalize_sources(values: tuple[str, ...]) -> tuple[str, ...]:
-    """Strip, drop blanks, deduplicate, sort.
-
-    Deliberately not lowercased. Source names are identifiers stored verbatim by the
-    adapters, so case-folding them here would invent a matching rule the database
-    does not have.
-    """
+    """Strip, de-duplicate and sort. Not lowercased: names are stored verbatim."""
     return tuple(sorted({v.strip() for v in values if v and v.strip()}))
 
 
@@ -124,8 +104,7 @@ class RetrievalQuery:
         )
         object.__setattr__(self, "sources", _normalize_sources(tuple(self.sources)))
 
-    # Which score components this query turns on. A component is active because the
-    # query asked for it, never because a particular job happens to have the data.
+    # Active because the query asked, never because a job has the data.
     @property
     def active_components(self) -> tuple[str, ...]:
         active = []
@@ -158,18 +137,10 @@ class RetrievalQuery:
 
 @dataclass(frozen=True)
 class ComponentScore:
-    """One score component, with everything needed to reconstruct its contribution.
+    """One score component and its contribution.
 
-    `active` says the query asked for this component. `present` says the job had the
-    data. An active component whose job data is missing scores 0 but keeps its weight
-    in the denominator, so missing data is never rewarded.
-
-    `present` is only meaningful when `active` is True. Retrieval does not load data
-    it has no use for: with preferred_skills inactive, candidate skills are never
-    fetched, so the skills component reports `present = False` regardless of what the
-    job actually has. That costs nothing, because an inactive component contributes
-    neither to the score nor to the denominator. The job's real skills are still
-    reported on RetrievedJob.job_skills for every returned job.
+    `active`: the query asked for it. `present`: the job had the data (meaningful
+    only when active, since inactive data is never loaded).
     """
 
     name: str
@@ -194,10 +165,7 @@ class ComponentScore:
 
 @dataclass(frozen=True)
 class ScoreBreakdown:
-    """The whole arithmetic, reconstructible without rerunning retrieval.
-
-    score == round(weighted_sum / active_weight, 6) when active_weight > 0, else 0.0.
-    """
+    """score == round(weighted_sum / active_weight, 6) when active_weight > 0, else 0.0."""
 
     components: tuple[ComponentScore, ...]
     active_weight: float
@@ -221,11 +189,7 @@ class ScoreBreakdown:
 
 @dataclass(frozen=True)
 class Evidence:
-    """A literal excerpt from a stored field.
-
-    `excerpt` is always a verbatim substring of the named field. Nothing is appended,
-    summarized or rewritten, so a later model citing this is citing stored data.
-    """
+    """A verbatim substring of a stored field, never rewritten."""
 
     field: str
     excerpt: str
@@ -236,13 +200,7 @@ class Evidence:
 
 @dataclass(frozen=True)
 class RetrievedJob:
-    """One ranked job, plus the grounding a later analyst would need.
-
-    Required skills are not restated per row: every returned job satisfies them by
-    construction, so listing them would mix a filter guarantee with a ranking signal.
-    `job_skills` is what the job actually has; the preferred sets are what the caller
-    asked for and did or did not get.
-    """
+    """One ranked job with its score breakdown, skills and evidence."""
 
     job_id: int
     environment: str
@@ -282,12 +240,7 @@ class RetrievedJob:
 
 @dataclass(frozen=True)
 class RetrievalResult:
-    """The ordered results plus enough context to replay the run.
-
-    `total_candidates` is every row that passed the hard filters, not a truncated
-    subset: retrieval scores all of them, so this number is the real denominator for
-    any recall discussion later.
-    """
+    """Ordered results; `total_candidates` counts every row that passed the filters."""
 
     query: RetrievalQuery
     jobs: tuple[RetrievedJob, ...] = field(default_factory=tuple)

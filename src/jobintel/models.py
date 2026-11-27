@@ -30,9 +30,7 @@ class RawJob(Base):
         DateTime(timezone=True),
         server_default=func.now(),
     )
-    # Environment isolation: development | test | production. No Python default and,
-    # since revision 2e3a197ea25f, no server default: a write that omits the
-    # environment fails instead of being silently labelled production.
+    # No default anywhere: a write that omits the environment must fail.
     environment: Mapped[str] = mapped_column(String, nullable=False, index=True)
 
 
@@ -40,12 +38,7 @@ class Job(Base):
     __tablename__ = "jobs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    # Environment the raw row this job was normalized from was ingested under.
-    # No Python default and no server_default on purpose: every writer must state
-    # the environment, so a path that forgets fails loudly instead of silently
-    # being labelled production. The temporary database DEFAULT 'production' that
-    # revision 7d2b1a4c9f30 added was removed by revision c4e81f6a2b57, so there is
-    # no database default either.
+    # The raw row's environment. No default anywhere: a write that omits it must fail.
     environment: Mapped[str] = mapped_column(String, nullable=False)
     title: Mapped[str] = mapped_column(String, nullable=False)
     company: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -61,9 +54,7 @@ class Job(Base):
     )
 
     __table_args__ = (
-        # Normalized identity is scoped to one environment. The same posting may
-        # exist once per environment and can never collapse two environments into
-        # one row. No standalone index on environment: it leads these constraints.
+        # Identity is per environment; these also serve as the environment index.
         UniqueConstraint("environment", "url", name="uq_jobs_environment_url"),
         UniqueConstraint("environment", "hash", name="uq_jobs_environment_hash"),
         Index("idx_jobs_location", "location"),
@@ -86,7 +77,7 @@ class JobSkill(Base):
 
 
 class IngestRun(Base):
-    """Track ingest run metrics for observability."""
+    """One row per ingest run."""
 
     __tablename__ = "ingest_runs"
 
@@ -94,9 +85,7 @@ class IngestRun(Base):
     source: Mapped[str] = mapped_column(String, nullable=False, index=True)
     search: Mapped[str | None] = mapped_column(String, nullable=True)
     limit: Mapped[int | None] = mapped_column(nullable=True)
-    # Environment isolation: development | test | production. No Python default and,
-    # since revision 2e3a197ea25f, no server default: a write that omits the
-    # environment fails instead of being silently labelled production.
+    # No default anywhere: a write that omits the environment must fail.
     environment: Mapped[str] = mapped_column(String, nullable=False, index=True)
 
     status: Mapped[str] = mapped_column(String, nullable=False)  # running|success|failed

@@ -1,10 +1,4 @@
-"""Arbeitnow job source implementation.
-
-Arbeitnow is a German job board API providing jobs primarily in Germany.
-API Docs: https://arbeitnow.com/api/job-board-api
-
-The API returns JSON with a 'data' array containing job listings.
-"""
+"""Arbeitnow source: a mostly German job board (https://arbeitnow.com/api/job-board-api)."""
 
 from __future__ import annotations
 
@@ -21,31 +15,17 @@ from jobintel.etl.sources.registry import register_source
 logger = logging.getLogger(__name__)
 
 ARBEITNOW_API_URL = "https://arbeitnow.com/api/job-board-api"
-# Rate limit: wait between API requests to avoid 429 errors
-REQUEST_DELAY_SECONDS = 2.5
-# Retry settings for 429 rate limit errors
+REQUEST_DELAY_SECONDS = 2.5  # between pages, to avoid 429s
 MAX_RETRIES = 3
 RETRY_BACKOFF_SECONDS = 5.0
 
 
 class ArbeitnowFetchError(RuntimeError):
-    """An Arbeitnow page could not be fetched, so the fetch as a whole has failed.
-
-    Raised rather than returning what was collected so far: a failed or partial
-    fetch must be recorded as a failed ingest run, never as a successful one with a
-    lower count.
-    """
+    """A page failed, so the whole fetch failed (a partial fetch must not look successful)."""
 
 
 def _fetch_page_with_retry(page: int) -> dict[str, Any]:
-    """Fetch a single page from Arbeitnow API with retry on 429.
-
-    Returns the JSON response dict.
-
-    Raises:
-        ArbeitnowFetchError: the request failed, the response was not valid JSON,
-            or every attempt was rate limited.
-    """
+    """Fetch one page, retrying on 429. Raises ArbeitnowFetchError on any failure."""
     for attempt in range(MAX_RETRIES):
         try:
             resp = requests.get(
@@ -76,23 +56,13 @@ def _fetch_page_with_retry(page: int) -> dict[str, Any]:
 
 
 def fetch_arbeitnow_jobs(search: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
-    """Fetch jobs from Arbeitnow API and normalize to canonical payload format.
+    """Fetch up to `limit` normalized jobs, filtering by `search` client-side.
 
-    Args:
-        search: Optional search filter (applied client-side).
-        limit: Maximum number of jobs to return.
-
-    Returns:
-        List of job payloads conforming to the canonical schema.
-
-    Raises:
-        ArbeitnowFetchError: any page needed to reach `limit` could not be fetched.
-            Pages already collected are discarded rather than returned as a
-            complete result.
+    Raises ArbeitnowFetchError if any needed page fails; collected pages are discarded.
     """
     payloads: list[dict[str, Any]] = []
     page = 1
-    max_pages = 10  # Safety limit to prevent infinite loops
+    max_pages = 10
 
     while page <= max_pages and len(payloads) < limit:
         data = _fetch_page_with_retry(page)
@@ -109,7 +79,6 @@ def fetch_arbeitnow_jobs(search: str | None = None, limit: int = 100) -> list[di
             if not payload:
                 continue
 
-            # Apply search filter client-side (API doesn't support search param well)
             if search:
                 search_lower = search.lower()
                 title = payload["title"]
@@ -121,13 +90,11 @@ def fetch_arbeitnow_jobs(search: str | None = None, limit: int = 100) -> list[di
 
             payloads.append(payload)
 
-        # Check for next page
         links = data.get("links", {})
         if not links.get("next"):
             break
 
         page += 1
-        # Rate limit to avoid 429 errors
         time.sleep(REQUEST_DELAY_SECONDS)
 
     logger.info("Fetched %d jobs from Arbeitnow", len(payloads))
@@ -135,27 +102,17 @@ def fetch_arbeitnow_jobs(search: str | None = None, limit: int = 100) -> list[di
 
 
 def _normalize_job(job: dict[str, Any]) -> dict[str, Any] | None:
-    """Normalize a single Arbeitnow job to canonical payload format.
-
-    Args:
-        job: Raw job dict from Arbeitnow API.
-
-    Returns:
-        Normalized payload dict, or None if required fields are missing.
-    """
+    """Map one Arbeitnow job to the canonical payload, or None without url or title."""
     slug = job.get("slug")
     url = job.get("url")
     title = job.get("title")
 
-    # Skip if missing required fields
     if not url or not title:
         logger.debug("Skipping job with missing url or title: %s", slug)
         return None
 
-    # Use slug as external_id, fall back to URL hash
     external_id = slug or hashlib.md5(url.encode()).hexdigest()[:16]
 
-    # Parse posted_at timestamp (Unix timestamp)
     posted_at = None
     created_at = job.get("created_at")
     if created_at:
@@ -164,15 +121,13 @@ def _normalize_job(job: dict[str, Any]) -> dict[str, Any] | None:
         except (ValueError, OSError, TypeError) as e:
             logger.debug("Failed to parse created_at for %s: %s", slug, e)
 
-    # Build description from HTML content
     description = job.get("description", "")
 
-    # Combine tags and job_types for tags field
     tags = job.get("tags", []) or []
     job_types = job.get("job_types", []) or []
     all_tags = tags + job_types
 
-    # Generate content hash for deduplication
+    # Arbeitnow's own MD5 hash; changing it would re-insert every stored row.
     content_for_hash = f"{title}|{job.get('company_name', '')}|{description}"
     content_hash = hashlib.md5(content_for_hash.encode()).hexdigest()
 
@@ -201,5 +156,4 @@ class ArbeitnowSource:
         return fetch_arbeitnow_jobs(search=search or None, limit=limit)
 
 
-# Auto-register with the source registry
 register_source(ArbeitnowSource())

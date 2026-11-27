@@ -12,7 +12,7 @@ from jobintel.models import RawJob
 
 
 def compute_content_hash(payload: dict[str, Any]) -> str:
-    """Stable hash for raw job payloads to make ingestion idempotent."""
+    """Stable payload hash for idempotent ingestion. Key set and serialization are frozen."""
     stable = {
         "source": payload.get("source"),
         "external_id": payload.get("external_id"),
@@ -30,24 +30,9 @@ def compute_content_hash(payload: dict[str, Any]) -> str:
 def upsert_raw_job(
     session: Session, payload: dict[str, Any], environment: str | None = None
 ) -> bool:
-    """Insert a raw job if we have not seen it before in this environment.
+    """Insert a raw job unless this environment already has it. Returns True if inserted.
 
-    Args:
-        session: SQLAlchemy session
-        payload: Raw job payload dict
-        environment: Environment tag (uses settings.ENV if None)
-
-    Deduplication is scoped to the environment, so the same posting can be
-    ingested once per environment while a repeat within one is still suppressed.
-    Unscoped, a development run silently suppressed the production ingest of the
-    same posting: raw_jobs never recorded it, so no production job could be
-    normalized from it, and the loss was invisible because nothing failed.
-
-    The content-hash key set and its serialization are unchanged. They are
-    persistent data-format behavior, and altering either would invalidate every
-    stored hash.
-
-    Returns True if inserted, False if it already existed in this environment.
+    Scoped to one environment so a development run cannot suppress a production ingest.
     """
     env = environment or settings.ENV
     payload = dict(payload)  # do not mutate caller

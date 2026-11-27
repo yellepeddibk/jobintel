@@ -59,7 +59,6 @@ def fetch_remotive_jobs(
     return payloads
 
 
-# Source wrapper for registry
 class RemotiveSource:
     """Remotive job source."""
 
@@ -70,5 +69,4 @@ class RemotiveSource:
         return fetch_remotive_jobs(search=search, limit=limit)
 
 
-# Auto-register on import
 register_source(RemotiveSource())

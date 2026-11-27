@@ -14,15 +14,7 @@ def load_raw_jobs(
     jsonl_path: str | Path,
     environment: str | None = None,
 ) -> int:
-    """Load raw jobs from a JSONL file into raw_jobs.
-
-    Args:
-        session: SQLAlchemy session
-        jsonl_path: Path to JSONL file with job payloads
-        environment: Environment tag (uses settings.ENV if None)
-
-    Idempotent: reruns will skip jobs already seen (via content_hash, plus URL when present).
-    """
+    """Load a JSONL file of payloads into raw_jobs, skipping ones already stored."""
     env = environment or settings.ENV
     path = Path(jsonl_path)
     inserted = 0
@@ -37,7 +29,6 @@ def load_raw_jobs(
                 continue
             payload = json.loads(line)
 
-            # Require 'source' field - no silent defaults
             if "source" not in payload or not payload["source"]:
                 raise ValueError(f"JSONL payload missing required field 'source': {payload}")
 

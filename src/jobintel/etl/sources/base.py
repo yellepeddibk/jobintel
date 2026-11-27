@@ -9,18 +9,8 @@ class JobSource(Protocol):
     name: str
 
     def fetch(self, search: str, limit: int) -> list[dict[str, Any]]:
-        """Fetch jobs from the source.
-
-        Returns list of standardized payload dicts with keys:
-        - source: str (required)
-        - url: str (required)
-        - title: str (required)
-        - company: str (optional)
-        - location: str (optional)
-        - description: str (optional)
-        - posted_at: str | date (optional, ISO format if string)
-        - content_hash: str (optional, will be computed if missing)
-        """
+        """Return payload dicts: source, url, title required; company, location,
+        description, posted_at, content_hash optional."""
         ...
 
 
@@ -29,12 +19,7 @@ OPTIONAL_KEYS = ["company", "location", "description", "posted_at", "content_has
 
 
 def validate_payload(payload: dict[str, Any]) -> tuple[bool, str]:
-    """Validate payload has required fields.
-
-    Returns (is_valid, error_message).
-    If valid, error_message is empty.
-    If invalid, error_message describes what's missing.
-    """
+    """Return (is_valid, error_message); the message is empty when valid."""
     missing = [key for key in REQUIRED_KEYS if not payload.get(key)]
 
     if missing:
@@ -46,10 +31,7 @@ def validate_payload(payload: dict[str, Any]) -> tuple[bool, str]:
 def validate_payloads(
     payloads: list[dict[str, Any]], source_name: str
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Validate a batch of payloads, filtering out invalid ones.
-
-    Returns (valid_payloads, warnings).
-    """
+    """Drop invalid payloads: returns (valid_payloads, warnings)."""
     valid = []
     warnings = []
 
