@@ -1,177 +1,109 @@
 # JobIntel
 
-Job market intelligence platform: ingests postings from public job board APIs, normalizes them
-through an ETL pipeline, extracts skills, and serves analytics through a Streamlit dashboard.
-
-This file holds durable, non-obvious requirements only. Read the sources below for detail.
+Ingests job postings from public job board APIs, normalizes them, extracts skills, and serves
+analytics in a Streamlit dashboard. This file lists durable rules only. Where the README
+disagrees with code, the code wins. `db/schema.sql` is stale; ignore it.
 
 ## Where to look
 
-| Question | Source of truth |
+| Topic | Source of truth |
 |---|---|
-| Product overview, user-facing docs | `README.md` |
-| Python version, Ruff, pytest config | `pyproject.toml` |
-| What CI actually runs | `.github/workflows/ci.yml` |
-| Scheduled ingestion behavior | `.github/workflows/ingest-jobs.yml` |
+| Python, Ruff, pytest config | `pyproject.toml` |
+| CI and scheduled ingestion | `.github/workflows/ci.yml`, `ingest-jobs.yml` |
 | Schema | `src/jobintel/models.py`, `alembic/versions/` |
-| Source adapter contract and registry | `src/jobintel/etl/sources/base.py`, `src/jobintel/etl/sources/registry.py` |
-| Hashing and idempotency | `src/jobintel/etl/raw.py`, `src/jobintel/etl/transform.py` |
-| Environment separation | `src/jobintel/models.py`, `src/jobintel/etl/transform.py`, `src/jobintel/analytics/queries.py` |
-
-`README.md` can drift. Where it disagrees with an implementation or configuration file, the
-code wins. `db/schema.sql` is stale reference material and is not the source of truth.
+| Adapters and registry | `src/jobintel/etl/sources/` |
+| Hashing and idempotency | `src/jobintel/etl/raw.py`, `transform.py` |
+| Analytics queries | `src/jobintel/analytics/queries.py` |
 
 ## Validation
 
-Run before every pull request. Both are CI gates; `ruff format` is not.
+`ruff check .` and `pytest` must pass before every PR (both are CI gates; `ruff format` is not).
 
-```bash
-ruff check .
-pytest
-```
+## Writing
 
-## Layer boundaries
+- Comments explain why, in one or two lines. No history, no restating the code.
+- Docstrings: a one-line summary, plus detail only when behavior is not obvious.
+- Docs stay short. README is for users; this file is for durable rules.
 
-New reusable domain, ETL, retrieval, analytics, and shared application logic belongs under
-`src/jobintel/`. `app/dashboard.py`, `scripts/`, and `alembic/` are entrypoints: keep them thin
-and do not add new shared business logic to them. The dashboard already carries query code of
-its own; that is existing state, not a pattern to extend. Behavior shared between the dashboard
-and a CLI script belongs in `etl/pipeline.py`.
+## Layers
 
-## Source adapter boundary
+- Reusable logic goes under `src/jobintel/`. `app/dashboard.py`, `scripts/`, and `alembic/`
+  are thin entrypoints.
+- Behavior shared by the dashboard and a script goes in `etl/pipeline.py`.
+- The dashboard's own query code is legacy; do not extend it.
 
-Job boards are integrated as registered adapters behind the `JobSource` protocol, with
-`fetch_from_source()` as the registry-driven path that fetches and validates. Preserve that
-boundary: new fetch paths go through the registry, not an adapter directly. Adapters own their
-rate limiting and retry behavior; do not strip it to speed up a run. Known exception:
-`scripts/fetch_remotive.py` calls its adapter directly, bypassing validation.
+## Source adapters
+
+- New fetch paths go through the registry (`fetch_from_source()`), not an adapter directly.
+  Known exception: `scripts/fetch_remotive.py`.
+- Adapters own their rate limiting and retries; do not strip them.
+- A failed or partial fetch must raise so the run is recorded as `failed`.
 
 ## Hashing and idempotency
 
-The content hash is what makes raw ingestion idempotent. Its input key set and its
-serialization are persistent data-format behavior, not implementation detail: changing either
-invalidates every stored hash and causes mass re-insertion of rows already ingested. The same
-care applies to the dedup seeding in `transform_jobs`, which makes re-runs idempotent across
-runs and not only within one. Both that seeding and the raw existence check are scoped to a
-single environment: keep them that way, since widening either silently lets one environment
-suppress another's rows, with no error to signal the loss. Sources do not all hash identically
-today; do not assume so.
-
-`_safe_date()` accepts what the adapters actually emit: date and datetime objects, Unix
-epoch numbers, bare ISO dates, ISO datetimes with or without an offset or a trailing Z, and
-numeric epoch strings. It rejects `bool` explicitly, since `bool` subclasses `int` and would
-otherwise be read as an epoch. It previously used `date.fromisoformat`, which rejects every
-datetime string the adapters send, so `posted_at` was NULL and the date component of
-`job_hash` was always empty, silently collapsing genuinely distinct repostings into one row.
-
-Correcting a parser does not rewrite stored hashes. Existing rows keep whatever they were
-written with, and URL deduplication means a re-run inserts nothing for them, so a parser
-change causes no mass re-insertion. Bringing old rows into line is a separate, explicit data
-repair: `etl/repair.py`, exposed as `scripts/repair_posted_at.py`. That repair backfills
-`posted_at` from the authoritative raw row and recomputes `job_hash`, in one transaction,
-for one explicit environment, refusing before it writes if the proposed state would break
-either unique constraint. It never runs `transform_jobs`; materializing postings the old
-hash suppressed is the normal pipeline's job, run separately afterwards.
+- The raw content hash's key set and serialization are a persistent data format. Changing
+  either re-inserts every stored row. Sources do not all hash the same way (Arbeitnow uses MD5).
+- Raw dedup and `transform_jobs` dedup seeding are scoped to one environment. Keep them so.
+- `_safe_date()` accepts what adapters emit (dates, datetimes, epochs, ISO strings with or
+  without offset or `Z`, numeric epoch strings) and rejects `bool`.
+- Parser fixes do not rewrite stored hashes. Old rows are fixed only by the explicit repair,
+  `scripts/repair_posted_at.py`: one environment, one transaction, refuses to break a unique
+  constraint, never runs `transform_jobs`.
+- Transform is insert-only: the first version of a listing wins; edits stay in `raw_jobs`.
 
 ## Raw payloads
 
-`raw_jobs.payload_json` holds the canonical ingested payload: the adapter's normalized form of
-the upstream response, not the untouched API body. Application code does not update or delete
-raw rows after ingestion, and no database constraint enforces that. Preserve the behavior:
-reprocess by re-running transform, not by rewriting stored raw rows.
+`raw_jobs.payload_json` is the adapter's normalized payload. Code never updates or deletes raw
+rows (no constraint enforces this). Reprocess by re-running transform.
 
 ## Environment separation
 
-**Environment separation is end to end.** The chain is:
+- `raw_jobs`, `ingest_runs`, and `jobs` carry `environment`. `job_skills` must not; it
+  inherits through `job_id`.
+- `environment` is always set explicitly on all three tables: no Python, ORM, or database
+  default (removed in `c4e81f6a2b57` and `2e3a197ea25f`). Fix the write path; never add one.
+- `transform_jobs()` handles exactly one environment per call. Loop at the call site.
+- Analytics filter `Job.environment` directly.
+- Identity is `UNIQUE(environment, url)` and `UNIQUE(environment, hash)`. That a job's
+  environment matches its raw row is held by `tests/test_environment_isolation.py`; do not
+  weaken it.
+- Joins to raw metadata must match environment and URL. Use `authoritative_raw_jobs()` and
+  `job_raw_onclause()`. A job's raw metadata is its lowest-id raw row for that environment
+  and URL (no `raw_job_id` exists).
+- One database can hold several environments; they must stay distinguishable.
 
-```
-RawJob.environment -> transform_jobs() for that one environment -> Job.environment
-                   -> analytics filtering on Job.environment
-```
+## Dashboard
 
-- `raw_jobs`, `ingest_runs` and `jobs` all carry an `environment` column.
-- `job_skills` does **not**, and must not gain one: it derives environment through its
-  `job_id` foreign key, and a job has exactly one.
-- `transform_jobs(session, environment=None)` processes **exactly one** environment per
-  call, `None` resolving to `settings.ENV`. There is no all-environments mode; loop at the
-  call site instead. It reads only raw rows for that environment, writes that environment
-  onto every job it creates, and scopes deduplication to it.
-- `upsert_raw_job()` deduplicates within one environment, so the same posting can be
-  ingested once per environment while a repeat within one is still suppressed.
-- Analytics filter `Job.environment` directly. Nothing reconstructs a job's environment by
-  matching its URL back to `raw_jobs`.
-
-Two mechanisms enforce this, and they fail differently:
-
-- **The database** enforces identity through `UNIQUE(environment, url)` and
-  `UNIQUE(environment, hash)`. Two environments can never collapse into one `jobs` row.
-- **Code** enforces that `Job.environment` matches the raw row it came from. No constraint
-  can express that, because it spans two tables, so `tests/test_environment_isolation.py`
-  holds it instead. Do not weaken those tests.
-
-**Where a query still needs raw metadata** (`source`, `ingested_at`), the join must match
-environment as well as URL. A URL-only join is now a defect, because the same URL may
-legitimately exist in several environments. Use `authoritative_raw_jobs()` and
-`job_raw_onclause()` from `analytics/queries.py` rather than writing a join by hand.
-
-**A job's raw metadata is resolved by rule, not by a foreign key.** There is no
-`raw_job_id`; do not claim database-enforced provenance. `source` and `ingested_at` come
-from the lowest-id `raw_jobs` row sharing the job's environment and URL, which is the row
-`transform_jobs()` normalized it from, since it reads raw rows in `id` order. Those two
-must stay in agreement. Without this rule a job with several raw versions fans out into
-several result rows, and `.distinct()` does not fix it because the differing column is the
-metadata being selected.
-
-Still true: `jobs` is not production-only. A single database can hold rows from several
-environments. The guarantee is that they stay distinguishable and cannot merge, not that
-they are physically separated.
-
-**`Job.environment` must always be supplied explicitly.** There is no fallback anywhere:
-no Python default, no ORM `server_default`, and since revision `c4e81f6a2b57` no database
-default either. A write that omits it fails on the `NOT NULL` constraint rather than being
-silently labelled production, which is the point. Do not reintroduce a default on this
-column in any of those three places to make a write path convenient; fix the write path.
-The same rule holds for `RawJob.environment` and `IngestRun.environment`: their Python
-defaults are gone, and revision `2e3a197ea25f` removed the database defaults that revision
-`fbbd657b4749` had left on them.
-
-The temporary `DEFAULT 'production'` that revision `7d2b1a4c9f30` added existed only to
-keep the previously deployed application inserting during the window between migrating the
-database and deploying code that knew about the column. That rollout is complete.
+- The production dashboard is public: no operator controls, no exception details, and it
+  never changes the database structure.
+- Every Analytics widget filters and charts by `job_date()` (posting date, else ingestion date).
 
 ## Database
 
-- **SQLite and Postgres must both work.** Tests run on SQLite by default, production is
-  Postgres. Anything dialect-specific needs both branches and test coverage for both.
-  Setting `TEST_POSTGRES_URL` runs the shared `engine`/`session` fixtures and the
-  empty-database migration tests on Postgres; CI does this in its `test-postgres` job. Use
-  those fixtures, or the session's own dialect, rather than hard-coding one.
-- Schema changes go through an Alembic migration, never destructive DDL and never
-  `create_all()`. Follow the style of the existing revisions.
-- Never point local development or a test run at the production `DATABASE_URL`. Several scripts
-  write to whatever `DATABASE_URL` is configured; confirm the target before running one.
+- SQLite and Postgres must both work. Tests default to SQLite; `TEST_POSTGRES_URL` runs the
+  shared fixtures and migration tests on Postgres (CI job `test-postgres`). Use the fixtures
+  or the session's dialect; never hard-code one.
+- Schema changes go through Alembic migrations, never `create_all()` or destructive DDL.
+- Never point local runs or tests at the production `DATABASE_URL`.
 
 ## Secrets
 
-`.env` holds real local credentials, is gitignored, and is never committed or pasted into code,
-tests, logs, or pull request text. `.env.example` is tracked, carries placeholders only, and
-stays in sync when a setting is added. Production credentials live only in GitHub Actions and
-Streamlit Cloud secrets. Redact connection strings before printing or logging them.
+`.env` is gitignored and never committed or pasted anywhere. `.env.example` holds placeholders
+and stays in sync with settings. Production credentials live only in GitHub Actions and
+Streamlit Cloud secrets. Redact connection strings before printing them.
 
 ## Scheduled ingestion
 
-Production ingestion runs weekly. **The cadence is an intentional cost constraint**, set to
-stay inside the Neon free-tier transfer limit. Increasing ingestion frequency or data volume
-is a maintainer decision, not an implementation detail.
+Weekly cadence is a deliberate cost limit (Neon free tier). Changing frequency or volume is a
+maintainer decision.
 
 ## Tests
 
-- New tests must be deterministic and must not depend on live external APIs. Mock at the
-  adapter's `requests.get`, or at `fetch_from_source` for pipeline tests.
-- `tests/conftest.py` blocks outbound network access for every test, failing any attempt to
-  resolve or connect to a non-local host. Do not disable it to make a test pass; mock instead.
+- Deterministic and offline. Mock the adapter's `requests.get`, or `fetch_from_source`.
+- `tests/conftest.py` blocks non-local network access. Mock instead of disabling it.
+- SQLAlchemy warnings fail the run (`pyproject.toml`).
 
 ## Change discipline
 
-Smallest complete change. No drive-by reformatting, renaming, or dependency bumps. Never
-weaken a test, a lint rule, or a safety check to make something pass.
+Smallest complete change. No drive-by reformatting, renames, or dependency bumps. Never weaken
+a test, lint rule, or safety check to make something pass.
