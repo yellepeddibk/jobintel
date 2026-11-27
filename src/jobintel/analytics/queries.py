@@ -389,8 +389,9 @@ def get_top_skills_by_source(
     sources = [
         row[0]
         for row in session.execute(
-            select(distinct(RawJob.source))
+            select(RawJob.source)
             .where(RawJob.environment == environment)
+            .distinct()
             .order_by(RawJob.source)
         ).all()
     ]

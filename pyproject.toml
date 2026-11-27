@@ -7,6 +7,12 @@ dependencies = []
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# SQLAlchemy's own warnings, including deprecations, fail the run so they surface in
+# CI (which installs the newest release) instead of scrolling past in the log.
+filterwarnings = [
+    "error::sqlalchemy.exc.SAWarning",
+    "error::sqlalchemy.exc.SADeprecationWarning",
+]
 
 [tool.ruff]
 line-length = 100
