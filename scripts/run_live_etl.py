@@ -13,7 +13,6 @@ from jobintel.etl.pipeline import run_ingest_sources
 def main() -> int:
     ap = argparse.ArgumentParser(description="Live ETL: fetch -> transform -> skills -> report")
     ap.add_argument("--search", default=None)
-    ap.add_argument("--category", default=None)
     ap.add_argument("--limit", type=int, default=200)
     ap.add_argument("--top", type=int, default=20)
     ap.add_argument(
