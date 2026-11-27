@@ -1,24 +1,7 @@
-"""End-to-end environment isolation for normalized jobs.
+"""Environment isolation: RawJob.environment -> transform -> Job.environment -> analytics.
 
-The invariant under test:
-
-    RawJob.environment -> transform for that exact environment -> Job.environment
-    -> analytics filtering
-
-Two mechanisms enforce it, and they are tested separately because they fail
-differently. The database enforces environment-scoped identity through
-UNIQUE(environment, url) and UNIQUE(environment, hash). `transform_jobs` enforces
-environment-correct behavior in code, which no constraint can express because it
-spans two tables.
-
-What is deliberately NOT claimed: there is no database-enforced pointer from a job
-to the exact raw row it came from. `raw_job_id` is not part of this change. Raw
-metadata is resolved by rule instead (lowest-id raw row for the job's environment
-and url), which the fan-out tests below pin down.
-
-These tests insert raw rows directly rather than through `upsert_raw_job`, because
-they are about transform and analytics. Environment-scoped raw deduplication has
-its own coverage in test_etl_raw.py.
+Covers the database uniques and the code-level guarantee no constraint can express.
+Raw rows are inserted directly; raw dedup is covered in test_etl_raw.py.
 """
 
 from __future__ import annotations
@@ -86,13 +69,7 @@ def jobs_by_env(session) -> dict[str, list[Job]]:
 
 
 def test_orm_created_schema_has_no_default_for_job_environment(engine):
-    """A database built from the model must not silently label rows production.
-
-    The expand migration added a temporary database DEFAULT 'production', which the
-    contract revision c4e81f6a2b57 removed. The model must never declare one, so a
-    writer that forgets an environment fails instead of being quietly attributed to
-    production.
-    """
+    """The model declares no environment default, so a forgotten environment fails."""
     column = next(c for c in inspect(engine).get_columns("jobs") if c["name"] == "environment")
     assert column["default"] is None
     assert column["nullable"] is False
@@ -370,11 +347,7 @@ def test_skill_trends_cannot_cross_environments(session):
 
 
 def test_multiple_raw_rows_for_one_url_do_not_inflate_counts(session):
-    """One job with several raw versions in one environment stays one job.
-
-    `.distinct()` does not fix this: the differing column is the metadata being
-    selected. Analytics resolves metadata through the authoritative raw row instead.
-    """
+    """A job with several raw versions in one environment stays one result row."""
     add_raw(session, PROD, "https://x/1", source="remotive", description="Python v1")
     add_raw(session, PROD, "https://x/1", source="remoteok", description="Python v2")
     add_raw(session, PROD, "https://x/1", source="remotive", description="Python v3")

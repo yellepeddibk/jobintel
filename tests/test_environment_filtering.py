@@ -1,7 +1,4 @@
-"""Tests for environment separation - ensures test data never pollutes production views.
-
-This is a guardrail test to prevent regression on environment filtering.
-"""
+"""Test data never appears in production views."""
 
 import pytest
 from sqlalchemy import create_engine
@@ -51,8 +48,7 @@ def test_queries_exclude_non_production_data(session):
 
     session.commit()
 
-    # Transform to jobs table
-    # Transform each environment separately: one environment per call.
+    # One environment per call.
     transform_jobs(session, environment="production")
     transform_jobs(session, environment="test")
     extract_skills_for_all_jobs(session, environment="production")

@@ -1,8 +1,4 @@
-"""scripts/run_live_etl.py exit status and reporting.
-
-Runs the script in-process with runpy. fetch_from_source is mocked and the database
-is the in-memory SQLite engine from conftest, so no network or external database.
-"""
+"""scripts/run_live_etl.py exit status and reporting, run in-process with runpy."""
 
 import runpy
 import sys

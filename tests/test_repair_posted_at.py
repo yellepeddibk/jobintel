@@ -1,9 +1,4 @@
-"""Tests for the one-time posted_at / hash repair.
-
-The repair rewrites stored data, so the tests care as much about what it refuses
-to do as about what it does: dry runs must not write, preflight failures must
-abort before any mutation, and a rerun must be a no-op.
-"""
+"""Tests for the posted_at / hash repair, including what it refuses to do."""
 
 from __future__ import annotations
 
@@ -249,8 +244,7 @@ def test_unparseable_raw_date_leaves_the_job_undated(session):
 def test_unresolved_authoritative_raw_row_aborts_before_writing(session):
     add_raw(session, "https://x/1", posted_at="2026-01-05T09:00:00+00:00")
     add_job(session, "https://x/1")
-    # Distinct fields, so this row is valid on insert and the only problem the
-    # repair can find is the missing raw row.
+    # Distinct fields, so the missing raw row is the only problem.
     add_job(session, "https://x/orphan", title="Orphan", company="Nowhere", location="Nowhere")
     session.commit()
     before = _snapshot(session)
@@ -301,13 +295,7 @@ def test_repair_errors_share_a_base_class(session):
 
 
 def test_survives_a_transient_hash_collision_during_the_rewrite(session):
-    """One row's new hash equals another row's old hash.
-
-    Rewriting hashes row by row would violate uq_jobs_environment_hash partway
-    through even though the final state is clean, because unique constraints are
-    checked per statement rather than deferred. The repair clears the hashes it is
-    about to move before assigning the new ones, so no intermediate state conflicts.
-    """
+    """One row's new hash equals another's old hash; clearing first avoids a mid-update clash."""
     shared = {"title": "Data Engineer", "company": "Acme", "location": "Remote"}
     jan, feb = date(2026, 1, 5), date(2026, 2, 5)
 

@@ -1,8 +1,4 @@
-"""run_ingest_sources: one failing source must not stop the others.
-
-fetch_from_source is mocked, so no network is used; data goes to the in-memory
-SQLite engine from conftest.
-"""
+"""run_ingest_sources: one failing source must not stop the others."""
 
 import re
 from unittest.mock import patch
@@ -90,11 +86,7 @@ def test_all_sources_succeed(session_factory):
 
 
 def test_a_source_that_breaks_its_session_does_not_stop_the_next(session_factory):
-    """A database error mid-ETL leaves that session needing a rollback.
-
-    Each source gets a fresh session, so the next one is unaffected, and the broken
-    source is still recorded as failed with the original error.
-    """
+    """A database error in one source's session does not affect the next source."""
     real_etl = pipeline.run_etl_from_payloads
 
     def etl(session, payloads, environment=None):

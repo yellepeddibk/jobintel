@@ -135,8 +135,7 @@ def test_database_error_mid_etl_is_recorded_and_reraised(engine):
         patch("jobintel.etl.pipeline.run_etl_from_payloads", side_effect=_etl_with_flush_error),
     ):
         with factory() as session:
-            # The original error, not a PendingRollbackError raised while recording it.
-            # SQLite says "NOT NULL constraint failed", Postgres "not-null constraint".
+            # The original error (wording differs between SQLite and Postgres).
             with pytest.raises(IntegrityError, match=r"(?i)not[ -]null"):
                 run_ingest(session, "remotive", "", 10, environment="test")
             # The caller's session is usable again afterwards.

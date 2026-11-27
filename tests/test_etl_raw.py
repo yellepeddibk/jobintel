@@ -33,12 +33,7 @@ def test_upsert_raw_job_is_idempotent():
 
 
 def test_the_same_posting_can_be_ingested_once_per_environment(session):
-    """Deduplication is scoped to the environment, not global.
-
-    Unscoped, a development row suppressed the production ingest of the same
-    posting: raw_jobs never recorded it, so no production job could be normalized,
-    and nothing failed to signal the loss.
-    """
+    """Raw dedup is per environment, so a dev row cannot suppress a production ingest."""
     payload = {
         "source": "remotive",
         "url": "https://example.com/job/1",

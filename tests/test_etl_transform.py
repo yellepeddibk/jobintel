@@ -35,12 +35,7 @@ def test_transform_dedupes_by_url(session):
 
 
 class TestSafeDate:
-    """_safe_date must accept what the adapters actually emit.
-
-    It previously used date.fromisoformat, which rejects every datetime string the
-    adapters produce, so posted_at was NULL for effectively every real posting and
-    the date component of job_hash collapsed to an empty string.
-    """
+    """_safe_date accepts what the adapters emit."""
 
     @pytest.mark.parametrize(
         ("value", "expected"),
@@ -121,13 +116,7 @@ class TestJobHashDateSensitivity:
 
 
 def test_repostings_are_no_longer_suppressed_by_unparseable_dates(session):
-    """The regression the parser fix exists to remove.
-
-    Three genuine repostings of one role, each with a different date, arriving as
-    the ISO datetimes every adapter emits. Under the old parser all three dates
-    became None, every hash collapsed to the same value, and two real postings were
-    silently dropped.
-    """
+    """Three repostings with different dates stay three jobs (the old parser merged them)."""
     for i, posted in enumerate(
         ["2026-01-05T09:00:00+00:00", "2026-02-05T09:00:00+00:00", "2026-03-05T09:00:00+00:00"]
     ):

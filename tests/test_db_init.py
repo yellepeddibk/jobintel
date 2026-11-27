@@ -29,8 +29,7 @@ def production(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "ENV", "production")
     # alembic/env.py reads the URL from the settings singleton.
     monkeypatch.setattr(settings, "DATABASE_URL", url)
-    # alembic.ini's logging config would otherwise reconfigure logging for the rest
-    # of the test session when env.py runs.
+    # Stop env.py reconfiguring logging for the session.
     monkeypatch.setattr("logging.config.fileConfig", lambda *a, **k: None)
     return url
 

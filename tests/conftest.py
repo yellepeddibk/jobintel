@@ -1,12 +1,8 @@
-"""Pytest configuration - isolate tests from dev/prod database.
-
-MUST be loaded before any jobintel imports to ensure settings picks up test env vars.
-"""
+"""Shared fixtures. Sets test env vars before any jobintel import."""
 
 import os
 
-# Force tests to use isolated in-memory SQLite
-# This MUST happen before importing any jobintel modules
+# Must run before any jobintel import.
 os.environ["ENV"] = "test"
 os.environ["DATABASE_URL"] = "sqlite+pysqlite:///:memory:"
 
@@ -39,12 +35,7 @@ def _refuse(target) -> None:
 
 @pytest.fixture(autouse=True)
 def _block_network(monkeypatch):
-    """Fail any test that tries to reach a host other than this machine.
-
-    Name lookup is blocked as well as connecting, because a lookup is itself a
-    network request. Loopback and Unix sockets stay allowed, since local machinery
-    such as an event loop's internal socket pair uses them.
-    """
+    """Fail any test that resolves or connects to a non-local host; loopback is allowed."""
 
     def getaddrinfo(host, *args, **kwargs):
         if not _is_local(host):
@@ -68,12 +59,7 @@ def _block_network(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _restore_streamlit_error_details():
-    """Undo the process-wide option a production dashboard render sets.
-
-    app/dashboard.py calls st.set_option("client.showErrorDetails", "none") when
-    ENV=production, and Streamlit config is global to the process, so without this a
-    render in one test would change how later tests display exceptions.
-    """
+    """Restore client.showErrorDetails, which a production render sets process-wide."""
     from streamlit import config as st_config
 
     before = st_config.get_option("client.showErrorDetails")
@@ -81,21 +67,15 @@ def _restore_streamlit_error_details():
     st_config.set_option("client.showErrorDetails", before)
 
 
-# Optional: when set, the shared `engine` fixture and the empty-database migration tests
-# run on this PostgreSQL server instead of SQLite. CI sets it in a separate job.
+# When set, the engine fixture and migration tests run on Postgres (CI job test-postgres).
 TEST_POSTGRES_URL = os.environ.get("TEST_POSTGRES_URL")
 
-# Postgres sessions give up on a blocked lock instead of hanging the run, for example
-# if a test leaves a transaction open while the next one drops the tables.
+# Fail on a blocked lock instead of hanging the run.
 POSTGRES_CONNECT_ARGS = {"options": "-c lock_timeout=10000"}
 
 
 def check_test_postgres_url(url: str) -> None:
-    """Refuse any test database that is not local and clearly named for tests.
-
-    The fixtures drop and recreate tables and whole databases, so this is what stops
-    a mistyped or copied URL from pointing them at a real database.
-    """
+    """Refuse non-local or non-jobintel_test URLs; the fixtures drop tables and databases."""
     from sqlalchemy.engine import make_url
 
     parsed = make_url(url)
@@ -126,12 +106,7 @@ DB_KINDS = ["sqlite"] + (["postgresql"] if TEST_POSTGRES_URL else [])
 
 @pytest.fixture(params=DB_KINDS)
 def make_database(request, tmp_path):
-    """Factory for empty databases of one kind, removed after the test.
-
-    Parametrized: SQLite always, plus PostgreSQL when TEST_POSTGRES_URL is set. SQLite
-    databases are files in tmp_path. PostgreSQL databases are created on the
-    TEST_POSTGRES_URL server with a unique jobintel_test_ name and dropped afterwards.
-    """
+    """Factory for empty databases: SQLite, plus Postgres when TEST_POSTGRES_URL is set."""
     import uuid
 
     from sqlalchemy import text
@@ -162,10 +137,7 @@ def make_database(request, tmp_path):
 
 @pytest.fixture
 def empty_db(make_database, monkeypatch):
-    """An empty database from make_database, plus an Alembic Config pointed at it.
-
-    Patches the settings singleton because alembic/env.py reads DATABASE_URL from it.
-    """
+    """An empty database and an Alembic Config for it (env.py reads settings.DATABASE_URL)."""
     from pathlib import Path
 
     from alembic.config import Config
@@ -175,8 +147,7 @@ def empty_db(make_database, monkeypatch):
     url = make_database("empty")
     monkeypatch.setattr(jobintel_config.settings, "DATABASE_URL", url, raising=False)
 
-    # Config without an .ini file: env.py then skips fileConfig, which would otherwise
-    # reconfigure logging for the rest of the test session.
+    # No .ini file, so env.py does not reconfigure logging for the session.
     cfg = Config()
     cfg.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
 
@@ -187,11 +158,7 @@ def empty_db(make_database, monkeypatch):
 
 @pytest.fixture
 def engine():
-    """A fresh, empty schema for each test.
-
-    In-memory SQLite by default. With TEST_POSTGRES_URL set, the tables are dropped and
-    recreated in that database instead, so each test still starts empty.
-    """
+    """A fresh, empty schema per test: in-memory SQLite, or TEST_POSTGRES_URL if set."""
     if TEST_POSTGRES_URL:
         eng = create_engine(TEST_POSTGRES_URL, connect_args=POSTGRES_CONNECT_ARGS)
         Base.metadata.drop_all(bind=eng)

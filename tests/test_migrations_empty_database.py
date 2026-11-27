@@ -1,10 +1,4 @@
-"""`alembic upgrade head` must build the full schema on an empty database.
-
-Runs Alembic against a temporary SQLite file, and also against a fresh PostgreSQL
-database when TEST_POSTGRES_URL is set. Before the baseline revision 9bfae4d007ee
-existed, the chain began with a revision that altered tables nothing had created, so
-an empty database failed with NoSuchTableError.
-"""
+"""`alembic upgrade head` builds the full schema on an empty database."""
 
 from __future__ import annotations
 
@@ -59,11 +53,7 @@ def test_upgrade_head_builds_an_empty_database(empty_db):
 
 
 def test_migrated_schema_matches_the_models(empty_db, make_database):
-    """Migrations and models must describe the same tables.
-
-    Compares columns and nullability, keys, unique constraints, indexes and foreign
-    keys, and server defaults.
-    """
+    """Migrations and models describe the same tables, defaults included."""
     engine, cfg = empty_db
     command.upgrade(cfg, "head")
 

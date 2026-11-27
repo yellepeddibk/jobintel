@@ -1,28 +1,8 @@
-"""Migration coverage for the jobs environment expansion (revision 7d2b1a4c9f30).
+"""Tests for the expand (7d2b1a4c9f30) and contract (c4e81f6a2b57) jobs.environment revisions.
 
-These tests run Alembic against a temporary SQLite file rather than the in-memory
-database the rest of the suite uses, because Alembic opens its own connection and an
-in-memory database would not survive it.
-
-The starting schema is written out as explicit DDL instead of being built from
-`jobintel.models`. That is deliberate: this test has to keep describing the schema as
-it was when the migration was written. Building it from the ORM would silently track
-future model changes, and the test would stop exercising the migration at exactly the
-point the model moves ahead of it.
-
-Two revisions are covered, the two halves of an expand/use/contract rollout:
-
-- `7d2b1a4c9f30` (expand) adds `jobs.environment` with a temporary
-  `DEFAULT 'production'`, so the application deployed at the time, which did not set
-  the column, kept inserting successfully.
-- `c4e81f6a2b57` (contract) removes that default now that the deployed application
-  sets `environment` explicitly. After it, a write that omits an environment fails
-  instead of being silently labelled production.
-
-Tests assert against whichever of those they are about. Ones describing behavior
-specific to the expand revision target `EXPAND_REVISION` by name, because "head" has
-moved past it; ones describing the current schema contract stay on "head", which is
-what proves the contract step preserved NOT NULL, both composite uniques and every row.
+Uses a temporary SQLite file (Alembic opens its own connection). The starting schema
+is fixed DDL, not the ORM, so the tests keep describing the schema these revisions
+were written against.
 """
 
 from __future__ import annotations
@@ -40,19 +20,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 PREVIOUS_HEAD = "fbbd657b4749"
 
-# The expand revision, which added jobs.environment together with a temporary
-# database-only DEFAULT 'production'. Tests that assert behavior specific to that
-# revision target it by name rather than "head", so they keep testing what they were
-# written to test as later revisions land. The contract revision c4e81f6a2b57 removes
-# that default, so "head" no longer has one; tests that assert the current schema
-# contract stay on "head" deliberately, which is what proves the contract step
-# preserved NOT NULL, both composite uniques, and every row.
+# Expand-specific tests target this by name; "head" has moved past it.
 EXPAND_REVISION = "7d2b1a4c9f30"
 
-# The schema as of revision fbbd657b4749: raw_jobs and ingest_runs carry an
-# environment column, jobs and job_skills do not, and jobs has global uniqueness on
-# url and hash. Matches what SQLAlchemy's create_all() emitted for SQLite at the time
-# this migration was authored.
+# Schema at fbbd657b4749, as create_all() emitted it for SQLite then.
 PRE_MIGRATION_DDL = (
     """
     CREATE TABLE raw_jobs (
@@ -115,9 +86,7 @@ PRE_MIGRATION_DDL = (
     "CREATE INDEX idx_ingest_runs_started_at ON ingest_runs (started_at)",
 )
 
-# Rows that exist before the migration: one ordinary row, one with NULL url and hash
-# (allowed then and now, because both engines treat NULLs as distinct in a unique
-# constraint), and a job_skills child to prove the SQLite table rebuild keeps it.
+# One ordinary row, two with NULL url/hash (NULLs are distinct), and job_skills children.
 SEED_JOBS = (
     "INSERT INTO jobs (id, title, company, location, url, posted_at, description, hash)"
     " VALUES (1, 'Data Engineer', 'Acme', 'Remote', 'https://example.com/j/1',"
@@ -141,11 +110,7 @@ def _unique_constraints(engine) -> dict[tuple[str, ...], str | None]:
 
 @pytest.fixture
 def migration_db(tmp_path, monkeypatch):
-    """A SQLite database at the previous Alembic head, plus a Config pointed at it.
-
-    Patches the settings singleton because alembic/env.py reads DATABASE_URL from it
-    and overwrites whatever the Config carries.
-    """
+    """SQLite database at fbbd657b4749 and a Config for it (env.py reads settings.DATABASE_URL)."""
     from jobintel.core import config as jobintel_config
 
     db_path = tmp_path / "migration.db"
@@ -160,8 +125,7 @@ def migration_db(tmp_path, monkeypatch):
 
     monkeypatch.setattr(jobintel_config.settings, "DATABASE_URL", url, raising=False)
 
-    # Config without an .ini file: env.py then skips fileConfig, which would otherwise
-    # reconfigure logging for the rest of the test session.
+    # No .ini file, so env.py does not reconfigure logging for the session.
     cfg = Config()
     cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
     command.stamp(cfg, PREVIOUS_HEAD)
@@ -182,12 +146,7 @@ def test_upgrade_adds_environment_column_as_not_null(migration_db):
 
 
 def test_expand_revision_leaves_a_temporary_server_default_behind(migration_db):
-    """The default is what kept the pre-deploy application inserting successfully.
-
-    Targets the expand revision by name, not "head": the contract revision removes
-    this default, and asserting it at "head" would test the opposite of the truth
-    once that landed.
-    """
+    """The expand revision's temporary default kept the old app's INSERTs working."""
     engine, cfg = migration_db
 
     command.upgrade(cfg, EXPAND_REVISION)
@@ -344,13 +303,7 @@ def test_downgrade_restores_global_uniqueness_and_drops_the_column(migration_db)
 
 
 def test_downgrade_refuses_rather_than_discard_cross_environment_rows(migration_db):
-    """Global uniqueness cannot be restored once two environments share a URL.
-
-    The refusal belongs to the expand revision's downgrade, so this starts there.
-    Downgrading from "head" would run the contract revision's downgrade first and
-    leave the version stamped between the two, which says nothing extra about the
-    guard being tested.
-    """
+    """Global uniqueness cannot be restored once two environments share a URL."""
     engine, cfg = migration_db
 
     command.upgrade(cfg, EXPAND_REVISION)
@@ -396,18 +349,9 @@ def test_upgrade_downgrade_upgrade_round_trip(migration_db):
 def test_application_writes_environment_rather_than_inheriting_the_server_default(
     migration_db,
 ):
-    """The use step's half of the expand/use/contract contract.
+    """The app writes environment itself, even where the expand default could mask it.
 
-    Runs at the expand revision on purpose, because that is where the temporary
-    DEFAULT 'production' still exists and can therefore mask a missing write. The
-    ORM declares no default of its own, so this pins that the application supplies
-    the value itself rather than leaning on the column default.
-
-    Transforming a 'development' environment against this production-shaped
-    database is the sharp version of that question: if the value came from the
-    server default the rows would read 'production'. Once the contract revision
-    removes the default there is nothing left to lean on, which is what
-    test_insert_without_environment_fails_after_contract_revision covers instead.
+    Writes 'development' rows; if the server default were used they would read 'production'.
     """
     from fixtures import TEST_JOB_PAYLOADS
     from sqlalchemy.orm import sessionmaker
@@ -512,17 +456,9 @@ def test_contract_revision_keeps_both_composite_unique_constraints(migration_db)
 
 
 def test_contract_revision_preserves_rows_indexes_and_child_table(migration_db):
-    """Every column value must survive, not just the ones the revision reasons about.
+    """The SQLite rebuild keeps every column value.
 
-    On SQLite the contract revision rebuilds the table: it copies every row into a new
-    one, drops the original and renames. A column omitted from the rebuild definition
-    would be lost silently, so the comparison covers all nine columns rather than a
-    representative few.
-
-    Columns are listed explicitly rather than using SELECT *, because the rebuild also
-    reorders them (the contract revision's table definition places environment second,
-    the expand revision's placed it last). SELECT * would compare tuples in two
-    different column orders and prove nothing.
+    Columns are listed explicitly because the rebuild reorders them.
     """
     all_columns = (
         "id, environment, title, company, location, url, posted_at, description, hash"

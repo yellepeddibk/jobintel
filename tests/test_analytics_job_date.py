@@ -1,8 +1,4 @@
-"""Every Analytics widget filters and charts by the same job date.
-
-The job date is the posting date, or the ingestion date when the source gave none.
-Uses the shared session fixture, so it runs on SQLite and, in CI, on PostgreSQL.
-"""
+"""Every Analytics widget uses the same job date (posting date, else ingestion date)."""
 
 from datetime import date, datetime, timedelta
 

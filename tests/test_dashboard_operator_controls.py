@@ -1,8 +1,4 @@
-"""The public production dashboard must not render operator controls.
-
-Renders app/dashboard.py in-process with Streamlit's AppTest against the in-memory
-SQLite database conftest configures. No network and no external database.
-"""
+"""The production dashboard never renders operator controls (AppTest, offline)."""
 
 from pathlib import Path
 
@@ -15,8 +11,7 @@ DASHBOARD = Path(__file__).resolve().parents[1] / "app" / "dashboard.py"
 
 
 def _render(monkeypatch: pytest.MonkeyPatch, env: str) -> AppTest:
-    # The dashboard reads the settings singleton on every run, so patching ENV here
-    # is what the script sees.
+    # The script re-reads settings on every run.
     monkeypatch.setattr(settings, "ENV", env)
     at = AppTest.from_file(str(DASHBOARD), default_timeout=60).run()
     assert not at.exception, [e.value for e in at.exception]

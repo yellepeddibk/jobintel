@@ -1,8 +1,4 @@
-"""Test fixtures - realistic job data for unit tests.
-
-These replace the old sample_jobs.jsonl approach with controlled, minimal test data.
-Uses real source names (remotive, arbeitnow) to test realistic scenarios.
-"""
+"""Small, realistic job payloads for tests."""
 
 from jobintel.etl.raw import upsert_raw_job
 from jobintel.etl.skills import extract_skills_for_all_jobs
@@ -70,15 +66,7 @@ TEST_JOB_DUPLICATE = {
 
 
 def seed_test_data(session, environment: str = "production") -> int:
-    """Insert test job payloads into the database.
-
-    Args:
-        session: SQLAlchemy session
-        environment: Environment tag for the jobs
-
-    Returns:
-        Number of jobs inserted
-    """
+    """Insert the test payloads into raw_jobs; returns the number inserted."""
     inserted = 0
     for payload in TEST_JOB_PAYLOADS:
         if upsert_raw_job(session, payload, environment=environment):
@@ -88,15 +76,7 @@ def seed_test_data(session, environment: str = "production") -> int:
 
 
 def seed_and_transform(session, environment: str = "production") -> dict:
-    """Seed test data and run the full ETL pipeline.
-
-    Args:
-        session: SQLAlchemy session
-        environment: Environment tag for the jobs
-
-    Returns:
-        Dict with counts: raw_inserted, jobs_transformed, skills_extracted
-    """
+    """Seed payloads and run ETL: {raw_inserted, jobs_transformed, skills_extracted}."""
     raw_inserted = seed_test_data(session, environment=environment)
     jobs_transformed = transform_jobs(session, environment=environment)
     skills_extracted = extract_skills_for_all_jobs(session, environment=environment)

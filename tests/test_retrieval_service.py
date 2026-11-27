@@ -1,9 +1,4 @@
-"""End-to-end retrieval against SQLite.
-
-These cover the parts pure scoring cannot: what SQL filters out, what it must not
-filter out, that source resolution neither drops nor duplicates a job, and that
-ordering does not depend on how rows reached us.
-"""
+"""End-to-end retrieval: SQL filtering, source resolution, order-independent ranking."""
 
 from __future__ import annotations
 
@@ -162,11 +157,7 @@ def test_repeated_retrieval_is_identical(session):
 
 
 def test_ordering_is_invariant_to_insertion_order(session):
-    """Same corpus, different insertion order, identical ranking.
-
-    Compared by the stable content hash rather than by job_id, because job_id is an
-    autoincrement surrogate that necessarily differs between the two builds.
-    """
+    """Same corpus, different insertion order, identical ranking (compared by hash)."""
     corpus = [
         ("a", "Data Engineer", "hash-a", date(2026, 9, 1)),
         ("b", "Data Engineer", "hash-b", date(2026, 9, 1)),
@@ -457,10 +448,7 @@ def test_today_defaults_to_the_current_date_at_the_boundary(session):
 
 
 # ------------------------------------------------ query-count regressions
-#
-# Skill loading is conditional, and the whole point is that a query which does not
-# rank on skills must not pay to load them for the entire corpus. These tests watch
-# the statements actually issued rather than trusting the code to be shaped right.
+# Queries that don't rank on skills must not load them for every candidate.
 
 SKILL_SELECT = "job_skills.job_id, job_skills.skill"
 LARGE_CORPUS = 1200
@@ -468,12 +456,7 @@ LARGE_CORPUS = 1200
 
 @contextmanager
 def watch_skill_queries(session):
-    """Capture every JobSkill-loading statement and its bound id count.
-
-    Matched on load_skills' exact select list rather than the table name, so the
-    correlated EXISTS a required_skills filter emits, which selects only
-    job_skills.job_id, is not mistaken for a skill load.
-    """
+    """Capture each skill-loading statement and its id count (not required_skills EXISTS)."""
     captured: list[int] = []
 
     def hook(conn, cursor, statement, parameters, context, executemany):
@@ -601,12 +584,7 @@ def test_conditional_skill_loading_does_not_change_ranking(large_corpus):
 def test_skills_component_present_is_false_when_the_query_does_not_rank_on_skills(
     large_corpus,
 ):
-    """Documented consequence of not loading what is not needed.
-
-    `present` is only meaningful for an active component. With skills inactive the
-    data is never fetched, so it reports False regardless of the job, which costs
-    nothing because an inactive component touches neither score nor denominator.
-    """
+    """With skills inactive, skills are never loaded, so `present` reports False."""
     result = retrieve(
         large_corpus, RetrievalQuery(environment=PROD, text="data", limit=5), today=TODAY
     )

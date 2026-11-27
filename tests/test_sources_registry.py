@@ -71,9 +71,7 @@ def test_get_source_unknown_raises():
         get_source("nonexistent")
 
 
-# One minimal response per job board, shaped like that board's real API body, keyed
-# by a fragment of the URL its adapter requests. Each job mentions "test" so it
-# survives the client-side search filter in the adapters that apply one.
+# One response per board, keyed by URL fragment. Each job mentions "test" to pass search.
 _CANNED_RESPONSES = {
     "remotive.com": {
         "jobs": [
@@ -128,11 +126,7 @@ def _fake_get(url, *args, **kwargs):
 
 
 def test_source_fetch_signature():
-    """Every registered source accepts search and limit and returns a list.
-
-    HTTP is replaced with canned responses, so this runs offline and does not depend
-    on the job boards being up.
-    """
+    """Every registered source accepts search and limit and returns a list (offline)."""
     with patch("requests.get", side_effect=_fake_get) as mock_get:
         for source_name in list_sources():
             mock_get.reset_mock()

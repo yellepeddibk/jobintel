@@ -1,8 +1,4 @@
-"""Tests for time bucketing in analytics queries.
-
-Tests the bucket_expr function and get_skill_trends granularity behavior
-using SQLite (in-memory test database).
-"""
+"""Tests for bucket_expr and get_skill_trends granularity."""
 
 from datetime import date, datetime, timedelta
 
@@ -16,10 +12,7 @@ from jobintel.models import RawJob
 
 
 def seed_jobs_with_times(session, times: list[datetime], environment: str = "test") -> int:
-    """Seed RawJob records with specific ingested_at times.
-
-    Creates jobs with skills for trends testing.
-    """
+    """Seed raw jobs with the given ingested_at times."""
     inserted = 0
     for i, ts in enumerate(times):
         raw = RawJob(
