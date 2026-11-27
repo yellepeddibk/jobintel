@@ -11,7 +11,7 @@ may now legitimately exist in more than one environment.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Literal
 
 from sqlalchemy import Date, Integer, and_, cast, distinct, func, select, text
@@ -189,6 +189,20 @@ def _base_job_query(
     """
     q = session.query(Job).filter(Job.environment == environment)
     return _apply_job_filters(q, source, date_from, date_to, search)
+
+
+def get_last_updated(session: Session, environment: str = PRODUCTION_ENV) -> datetime | None:
+    """When this environment's data last changed: the latest successful ingest's finish.
+
+    Failed and still-running runs are ignored, so the time reflects data that was
+    actually loaded. Returns None when the environment has no successful run.
+    """
+    return session.execute(
+        select(func.max(IngestRun.finished_at)).where(
+            IngestRun.environment == environment,
+            IngestRun.status == "success",
+        )
+    ).scalar()
 
 
 def get_kpis(

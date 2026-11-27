@@ -1,6 +1,6 @@
 import logging
 import re
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pandas as pd
 import streamlit as st
@@ -10,12 +10,13 @@ from jobintel.analytics.location import is_us_query, us_location_clause
 from jobintel.analytics.queries import (
     authoritative_raw_jobs,
     get_kpis,
+    get_last_updated,
     get_skill_trends,
     get_top_skills,
     get_top_skills_by_source,
     job_raw_onclause,
 )
-from jobintel.core.config import settings
+from jobintel.core.config import database_host, is_local_database, settings
 from jobintel.db import SessionLocal, init_db
 from jobintel.etl.pipeline import run_ingest
 from jobintel.etl.sources.registry import list_sources
@@ -56,6 +57,21 @@ if settings.is_production:
 st.title("JobIntel Dashboard")
 st.caption("Job board ingestion → normalize → extract skills → analytics")
 
+# Outside production, say plainly which environment this is, and warn loudly if the
+# session is pointed at a database that is not on this machine (such as production).
+# Database details otherwise live in the sidebar's Debug Config panel. Shown before
+# the connection check so it is visible even when the connection fails. The public
+# site shows nothing here.
+if OPERATOR_CONTROLS:
+    st.info(f"**{settings.ENV.capitalize()} environment**", icon="🛠️")
+    if not is_local_database(settings.DATABASE_URL):
+        st.error(
+            "This session is using a database that is not on this machine: "
+            f"{database_host(settings.DATABASE_URL)}. Local runs must never point at "
+            "production.",
+            icon="⚠️",
+        )
+
 # Debug: show exactly what config the dashboard is using
 if OPERATOR_CONTROLS:
     with st.sidebar.expander("🔧 Debug Config", expanded=False):
@@ -87,6 +103,22 @@ except Exception as e:
         "Expected format: postgresql+psycopg://user:password@host/database?sslmode=require"
     )
     st.stop()
+
+
+def format_last_updated(finished_at: datetime | None) -> str:
+    """'Data last updated' text. Naive timestamps are stored as UTC."""
+    if finished_at is None:
+        return "Data last updated: no successful ingest yet."
+    if finished_at.tzinfo is not None:
+        finished_at = finished_at.astimezone(UTC)
+    return f"Data last updated: {finished_at:%Y-%m-%d %H:%M} UTC"
+
+
+try:
+    with SessionLocal() as s:
+        st.caption(format_last_updated(get_last_updated(s, environment=DATA_ENV)))
+except Exception as e:
+    show_error("Failed to load when the data was last updated.", e)
 
 
 def strip_html_tags(text: str) -> str:
