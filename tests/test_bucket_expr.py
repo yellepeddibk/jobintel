@@ -4,11 +4,12 @@ Tests the bucket_expr function and get_skill_trends granularity behavior
 using SQLite (in-memory test database).
 """
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
+import pytest
 from sqlalchemy import select
 
-from jobintel.analytics.queries import bucket_expr, get_skill_trends
+from jobintel.analytics.queries import auto_granularity, bucket_expr, get_skill_trends
 from jobintel.etl.skills import extract_skills_for_all_jobs
 from jobintel.etl.transform import transform_jobs
 from jobintel.models import RawJob
@@ -146,8 +147,6 @@ class TestGetSkillTrendsGranularity:
 
     def test_trends_auto_granularity_short_range(self, session):
         """Auto granularity should use 6h for ≤7 day range."""
-        from datetime import date
-
         base_date = datetime(2026, 1, 15)
         times = [base_date.replace(hour=1), base_date.replace(hour=13)]
 
@@ -165,16 +164,36 @@ class TestGetSkillTrendsGranularity:
             environment="test",
         )
 
-        # Should return results (granularity internally set to 6h)
-        assert isinstance(trends, list)
+        # 01:00 and 13:00 fall in different 6-hour buckets.
+        assert len({t["bucket"] for t in trends}) == 2
+
+    def test_trends_auto_with_open_end_uses_the_range_to_today(self, session):
+        """A "Last 30 days" range has no end date; Auto must still pick daily."""
+        two_days_ago = datetime.combine(date.today() - timedelta(days=2), datetime.min.time())
+        times = [two_days_ago.replace(hour=1), two_days_ago.replace(hour=13)]
+
+        seed_jobs_with_times(session, times, environment="test")
+        transform_jobs(session, environment="test")
+        extract_skills_for_all_jobs(session, environment="test")
+
+        trends = get_skill_trends(
+            session,
+            skills=["python"],
+            date_from=date.today() - timedelta(days=30),
+            granularity=None,
+            environment="test",
+        )
+
+        # Daily, not 6-hour: both jobs share one bucket.
+        assert len({t["bucket"] for t in trends}) == 1
 
     def test_trends_returns_empty_for_no_skills(self, session):
         """get_skill_trends should return empty list when no skills provided."""
         trends = get_skill_trends(session, skills=[], environment="test")
         assert trends == []
 
-    def test_trends_default_granularity_is_6h(self, session):
-        """When no date range and no granularity, should default to 6h."""
+    def test_trends_all_time_auto_is_weekly(self, session):
+        """With no date range ("All Time"), Auto groups weekly."""
         base_date = datetime(2026, 1, 15)
         times = [base_date.replace(hour=1), base_date.replace(hour=13)]
 
@@ -182,7 +201,6 @@ class TestGetSkillTrendsGranularity:
         transform_jobs(session, environment="test")
         extract_skills_for_all_jobs(session, environment="test")
 
-        # Request without date range (should default to 6h)
         trends = get_skill_trends(
             session,
             skills=["python"],
@@ -190,5 +208,28 @@ class TestGetSkillTrendsGranularity:
             environment="test",
         )
 
-        # Should return results with multiple buckets if 6h bucketing worked
-        assert isinstance(trends, list)
+        # Weekly, not 6-hour: both jobs share one bucket.
+        assert len({t["bucket"] for t in trends}) == 1
+
+
+TODAY = date(2026, 11, 26)
+
+
+@pytest.mark.parametrize(
+    ("date_from", "date_to", "expected"),
+    [
+        # The dashboard's ranges: a start date and no end date.
+        (TODAY - timedelta(days=7), None, "6h"),
+        (TODAY - timedelta(days=30), None, "day"),
+        (TODAY - timedelta(days=90), None, "week"),
+        # All Time: no range at all.
+        (None, None, "week"),
+        # Explicit ranges, at each boundary.
+        (date(2026, 1, 1), date(2026, 1, 8), "6h"),
+        (date(2026, 1, 1), date(2026, 1, 9), "day"),
+        (date(2026, 1, 1), date(2026, 3, 2), "day"),
+        (date(2026, 1, 1), date(2026, 3, 3), "week"),
+    ],
+)
+def test_auto_granularity(date_from, date_to, expected):
+    assert auto_granularity(date_from, date_to, today=TODAY) == expected

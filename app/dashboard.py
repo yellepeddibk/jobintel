@@ -497,7 +497,8 @@ with tab_analytics:
         index=0,
         help=(
             "Groups jobs by when they were ingested, not by a refresh schedule. "
-            "Auto uses 6-hour buckets."
+            "Auto uses 6-hour groups for the last 7 days, daily for up to 60 days, "
+            "and weekly for longer ranges and All Time."
         ),
     )
     granularity = granularity_options[granularity_label]

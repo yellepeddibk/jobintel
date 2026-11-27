@@ -248,6 +248,24 @@ def get_top_skills(
     return [(skill, int(n)) for skill, n in q.all()]
 
 
+def auto_granularity(date_from: date | None, date_to: date | None, *, today: date) -> Bucket:
+    """Pick a bucket size for the span being charted.
+
+    Up to 7 days: 6-hour buckets. Up to 60 days: daily. Longer: weekly. A missing end
+    date means the span runs to `today`, which is how the dashboard's "Last N days"
+    ranges arrive. A missing start date means all history, charted weekly to match the
+    weekly ingestion schedule.
+    """
+    if date_from is None:
+        return "week"
+    days = ((date_to or today) - date_from).days
+    if days <= 7:
+        return "6h"
+    if days <= 60:
+        return "day"
+    return "week"
+
+
 def get_skill_trends(
     session: Session,
     skills: list[str],
@@ -265,7 +283,7 @@ def get_skill_trends(
         source: Optional source filter
         date_from: Optional start date (inclusive)
         date_to: Optional end date (inclusive)
-        granularity: '6h', 'day', or 'week'. If None, auto-detects based on date range.
+        granularity: '6h', 'day', or 'week'. If None, chosen by `auto_granularity`.
         environment: Environment filter (default: production)
 
     Returns:
@@ -275,19 +293,8 @@ def get_skill_trends(
     if not skills:
         return []
 
-    # Auto-detect granularity based on date range
     if granularity is None:
-        if date_from and date_to:
-            days = (date_to - date_from).days
-            if days <= 7:
-                granularity = "6h"
-            elif days <= 60:
-                granularity = "day"
-            else:
-                granularity = "week"
-        else:
-            # Default to 6h to match ingestion cadence
-            granularity = "6h"
+        granularity = auto_granularity(date_from, date_to, today=date.today())
 
     dialect_name = session.bind.dialect.name if session.bind else "sqlite"
 
