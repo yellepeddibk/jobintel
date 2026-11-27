@@ -7,13 +7,11 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Windows: Streamlit (and some shells) can trigger a transient KeyError while
-# pydantic_settings iterates env vars. Setting this makes env parsing stable.
+# Windows: avoids a transient KeyError while pydantic_settings reads env vars.
 if os.name == "nt":
     os.environ.setdefault("NODEFAULTCURRENTDIRECTORYINEXEPATH", "1")
 
-# Compute absolute path to .env so Streamlit finds it regardless of cwd
-# Path: config.py -> core/ -> jobintel/ -> src/ -> PROJECT_ROOT
+# Absolute, so Streamlit finds .env from any working directory.
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ENV_FILE = PROJECT_ROOT / ".env"
 
@@ -29,10 +27,7 @@ class Environment(StrEnum):
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), extra="ignore")
 
-    # Default to SQLite so the repo runs locally without Docker.
-    DATABASE_URL: str = "sqlite:///./jobintel.db"
-
-    # Runtime environment (development | test | production)
+    DATABASE_URL: str = "sqlite:///./jobintel.db"  # runs locally without Docker
     ENV: Literal["development", "test", "production"] = "development"
 
     @property
@@ -66,14 +61,7 @@ def get_settings() -> Settings:
 
 
 def redact_db_url(url: str) -> str:
-    """Redact password from database URL for safe logging.
-
-    Args:
-        url: Database connection string
-
-    Returns:
-        URL with password replaced by '***'
-    """
+    """Database URL with the password replaced by '***'."""
     try:
         from sqlalchemy.engine import make_url
 
@@ -110,11 +98,7 @@ def database_host(url: str) -> str:
 
 
 def is_local_database(url: str) -> bool:
-    """Whether a database URL points at this machine.
-
-    SQLite, a loopback or localhost host, or no host at all (a local socket). An
-    unparsable URL counts as not local, so a warning errs on the side of showing.
-    """
+    """True for SQLite, localhost, loopback, or no host (local socket). Unparsable: False."""
     try:
         from sqlalchemy.engine import make_url
 

@@ -1,9 +1,4 @@
-"""Deterministic job retrieval.
-
-Filters in SQL, ranks in Python, and returns a fully reconstructible score for every
-result. No embeddings and no model: this layer must be understandable, testable and
-benchmarkable on its own before anything probabilistic is built on top of it.
-"""
+"""Deterministic job retrieval: filter in SQL, rank in Python, explain every score."""
 
 from jobintel.retrieval.contracts import (
     ComponentScore,

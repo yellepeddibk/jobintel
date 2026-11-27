@@ -1,22 +1,8 @@
-"""Location matching for the dashboard's "Location contains" filter.
+"""US location matching for the dashboard's location filter.
 
-Typing US, USA or United States switches the filter to `us_location_clause`, which
-matches a US location by any of:
-
-- a whole word "us", "usa" or "united states", after lowercasing, turning separators
-  into spaces and dropping dots, so "Remote - US", "USA Only" and "U.S.A." match but
-  "Australia", "Russia" and "Brussels" do not;
-- a trailing ", XX" where XX is one of the 50 state codes or DC, compared
-  case-sensitively, so "Austin, TX" matches but "London, UK" and "Toronto, ON" do not;
-- one of a fixed list of major US city names.
-
-Everything is plain SQL (lower, replace, trim, substr, length, LIKE) that behaves the
-same on SQLite and PostgreSQL.
-
-Known limits: a country code that is also a state code still matches, for example
-"Berlin, DE" (Delaware), "Toronto, CA" (California) or "Pune, IN" (Indiana). Regions
-such as "Americas" or "North America" do not match, because they are not only the US,
-and neither does a US city outside the list without a state code.
+Matches the whole word us/usa/united states, a trailing ", XX" state code
+(case-sensitive), or a known US city. Plain SQL, same on SQLite and Postgres.
+Known limit: country codes that equal state codes ("Berlin, DE") still match.
 """
 
 from __future__ import annotations
@@ -37,7 +23,7 @@ US_STATE_CODES = (
     "DC",
 )  # fmt: skip
 
-# Major US cities (tech hubs and common job markets), matched as substrings.
+# Matched as substrings.
 US_CITIES = (
     "New York",
     "Los Angeles",
@@ -59,8 +45,7 @@ US_CITIES = (
     "Washington",
 )
 
-# Characters treated as word separators. Dots are removed rather than replaced, so
-# "U.S." becomes "us".
+# Word separators. Dots are removed instead, so "U.S." becomes "us".
 _SEPARATORS = (",", "(", ")", "/", "-", "|", ";", ":")
 
 

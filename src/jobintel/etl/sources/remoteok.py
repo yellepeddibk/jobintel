@@ -15,36 +15,27 @@ REMOTEOK_API = "https://remoteok.com/api"
 def fetch_remoteok_jobs(
     search: str | None = None, limit: int = 100, timeout_s: int = 30
 ) -> list[dict[str, Any]]:
-    """Fetch jobs from RemoteOK and normalize to JobIntel format.
-
-    RemoteOK API returns jobs with different field names, so we normalize them.
-    """
-    # RemoteOK API requires user agent
-    headers = {"User-Agent": "JobIntel/1.0"}
+    """Fetch up to `limit` normalized jobs, filtering by `search` client-side."""
+    headers = {"User-Agent": "JobIntel/1.0"}  # required by the API
 
     resp = requests.get(REMOTEOK_API, headers=headers, timeout=timeout_s)
     resp.raise_for_status()
     data = resp.json()
 
-    # RemoteOK returns list where first item is metadata
-    jobs = data[1:] if isinstance(data, list) and len(data) > 1 else []
+    jobs = data[1:] if isinstance(data, list) and len(data) > 1 else []  # [0] is metadata
 
     payloads: list[dict[str, Any]] = []
     for j in jobs:
-        # The limit counts matching jobs, so it is checked here rather than by
-        # slicing the response, which would apply it before the search filter.
-        if len(payloads) >= limit:
+        if len(payloads) >= limit:  # counts matches, so checked after filtering
             break
 
-        # Normalize RemoteOK fields to our standard format
         url = j.get("url") or f"https://remoteok.com/remote-jobs/{j.get('id')}"
         title = j.get("position") or j.get("title") or ""
         company = j.get("company") or ""
         location = j.get("location") or "Remote"
         description = j.get("description") or ""
-        posted_at = j.get("date") or j.get("epoch")  # RemoteOK uses epoch timestamp
+        posted_at = j.get("date") or j.get("epoch")
 
-        # Apply search filter client-side (RemoteOK API doesn't support search param)
         if search:
             search_lower = search.lower()
             searchable = f"{title} {company} {description}".lower()
@@ -63,7 +54,6 @@ def fetch_remoteok_jobs(
             "tags": j.get("tags", []),
         }
 
-        # Compute content hash for deduplication
         payload["content_hash"] = compute_content_hash(payload)
         payloads.append(payload)
 
@@ -80,5 +70,4 @@ class RemoteOKSource:
         return fetch_remoteok_jobs(search=search, limit=limit)
 
 
-# Auto-register on import
 register_source(RemoteOKSource())

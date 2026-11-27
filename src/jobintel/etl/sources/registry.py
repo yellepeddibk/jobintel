@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from jobintel.etl.sources.base import JobSource
 
-# Registry will be populated as sources are imported
 _SOURCES: dict[str, Any] = {}
 _initialized = False
 
@@ -21,12 +20,12 @@ def register_source(source: JobSource) -> None:
 
 
 def _init_sources() -> None:
-    """Lazy initialization - import source modules to trigger registration."""
+    """Import the source modules, which register themselves."""
     global _initialized
     if _initialized:
         return
 
-    # Direct module imports to avoid circular dependency through __init__.py
+    # Import modules directly to avoid a cycle through the package __init__.
     from jobintel.etl.sources.arbeitnow import ArbeitnowSource  # noqa: F401
     from jobintel.etl.sources.remoteok import RemoteOKSource  # noqa: F401
     from jobintel.etl.sources.remotive import RemotiveSource  # noqa: F401
@@ -51,10 +50,7 @@ def get_source(name: str) -> JobSource:
 def fetch_from_source(
     source_name: str, search: str, limit: int
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Fetch and validate payloads from a source.
-
-    Returns (valid_payloads, warnings).
-    """
+    """Fetch from a source and validate: returns (valid_payloads, warnings)."""
     from jobintel.etl.sources.base import validate_payloads
 
     _init_sources()

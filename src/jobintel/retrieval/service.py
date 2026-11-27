@@ -1,17 +1,6 @@
-"""Orchestration: filter in SQL, score in Python, hydrate the top-k.
+"""Retrieval orchestration: score every candidate from a light row, then hydrate the top-k.
 
-The shape is score-then-hydrate. Every candidate is scored from a lightweight row
-that is discarded immediately, then only the jobs actually being returned are fetched
-again for their full fields and evidence. That keeps memory bounded by the number of
-candidates rather than by the size of every description, and keeps evidence work
-proportional to `limit` instead of to the corpus.
-
-Skill loading follows the same principle and is conditional. When `preferred_skills`
-participates in scoring, every candidate's skills are loaded in bounded batches
-because ranking needs them, and the returned jobs reuse that data rather than
-refetching it. When it does not, no candidate-wide load happens at all and skills are
-fetched only for the returned top-k, purely to populate `job_skills`. No query is
-issued per candidate in either case.
+Candidate skills are loaded only when preferred_skills ranks something.
 """
 
 from __future__ import annotations
@@ -48,15 +37,13 @@ from jobintel.retrieval.scoring import (
     tokenize,
 )
 
-# Evidence stays small on purpose. This is grounding for a later analyst, not a
-# summarizer: a bounded number of literal windows, each capped in length.
 MAX_EVIDENCE_SPANS = 4
 EVIDENCE_WINDOW = 240
 
 
 @dataclass(frozen=True)
 class _Scored:
-    """What survives scoring. No description: it is dropped with the candidate row."""
+    """A scored candidate, without its description."""
 
     job_id: int
     environment: str
@@ -68,12 +55,7 @@ class _Scored:
 
 
 def _excerpt(text: str, term: str) -> str | None:
-    """A literal window of `text` around the first occurrence of `term`.
-
-    Returns a verbatim substring. Nothing is appended, trimmed to a sentence, or
-    rewritten, so an excerpt can always be found character-for-character in the
-    stored field.
-    """
+    """Verbatim window of `text` around the first occurrence of `term`, or None."""
     if not text or not term:
         return None
     position = text.lower().find(term.lower())
@@ -89,12 +71,7 @@ def _build_evidence(
     query: RetrievalQuery, title: str, description: str | None,
     matched_skills: tuple[str, ...],
 ) -> tuple[Evidence, ...]:
-    """Title plus a few description windows, in a deterministic order.
-
-    Matched skills come before query tokens because a skill match is the more
-    specific claim, and both are iterated in a fixed order so the same job always
-    produces the same evidence.
-    """
+    """Title plus description windows for matched skills, then query tokens."""
     spans: list[Evidence] = []
     if title:
         spans.append(Evidence(field="title", excerpt=title))
@@ -118,23 +95,13 @@ def retrieve(
     *,
     today: date | None = None,
 ) -> RetrievalResult:
-    """Rank jobs for one environment, deterministically.
-
-    `today` is resolved once here, at the service boundary, and then passed
-    explicitly to filtering and scoring. Nothing downstream reads the clock, so a
-    caller that pins `today` gets a fully reproducible run.
-    """
+    """Rank jobs for one environment. Pass `today` for a reproducible run."""
     resolved_today = today if today is not None else date.today()
     active = query.active_components
     tokens = tokenize(query.text)
 
-    # Pass 1: score every candidate, holding no descriptions.
     candidates = list(iter_candidates(session, query, today=resolved_today))
 
-    # Candidate-wide skills are loaded only when they actually rank something. A
-    # text-only or filter-only query does not need them to order anything, and
-    # loading them for the whole corpus would cost a batch per 400 candidates to
-    # produce a field only the returned handful ever shows.
     skills_by_job: dict[int, frozenset[str]] = {}
     if query.preferred_skills and candidates:
         skills_by_job = load_skills(session, [c.job_id for c in candidates])
@@ -180,10 +147,7 @@ def retrieve(
     top = scored[: query.limit]
     top_ids = [s.job_id for s in top]
 
-    # Pass 2: hydrate only what is being returned. Skills for the returned jobs come
-    # from the candidate-wide load when scoring already did it, and are otherwise
-    # fetched for just these ids, so job_skills is always populated and the data is
-    # never loaded twice.
+    # Reuse skills already loaded for scoring; otherwise load them for the top-k only.
     top_skills = (
         {job_id: skills_by_job.get(job_id, frozenset()) for job_id in top_ids}
         if query.preferred_skills

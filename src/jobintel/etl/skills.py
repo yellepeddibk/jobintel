@@ -24,12 +24,7 @@ _SKILL_PATTERNS: dict[str, str] = {
 
 
 def known_skills() -> frozenset[str]:
-    """The canonical skill names this extractor can produce.
-
-    Derived from _SKILL_PATTERNS rather than restated, so a caller validating
-    requested skills cannot drift from what extraction actually emits. Callers
-    outside this module should use this instead of hardcoding the vocabulary.
-    """
+    """Skill names extraction can produce. Use this instead of hardcoding the list."""
     return frozenset(_SKILL_PATTERNS)
 
 
@@ -64,15 +59,7 @@ def extract_skills_for_jobs(session: Session, jobs: Iterable[Job]) -> int:
 
 
 def extract_skills_for_all_jobs(session: Session, environment: str | None = None) -> int:
-    """Extract skills for every job in one environment.
-
-    JobSkill carries no environment column: it derives one through its job_id
-    foreign key, and each job now has exactly one. Scoping here is therefore not
-    needed for correctness, but it keeps a run from doing another environment's
-    work and keeps IngestRun.inserted_skills describing the run that produced it.
-
-    None resolves to settings.ENV, matching the rest of the pipeline.
-    """
+    """Extract skills for one environment's jobs, so inserted_skills counts only this run's."""
     env = environment or settings.ENV
     jobs = session.execute(select(Job).where(Job.environment == env)).scalars().all()
     return extract_skills_for_jobs(session, jobs)
