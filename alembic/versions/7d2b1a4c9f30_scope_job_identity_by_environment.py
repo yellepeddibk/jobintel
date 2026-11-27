@@ -4,55 +4,12 @@ Revision ID: 7d2b1a4c9f30
 Revises: fbbd657b4749
 Create Date: 2026-09-05 00:00:00.000000
 
-Expand step of an expand/use/contract rollout.
+Expand step: adds jobs.environment (existing rows backfilled to 'production', assumed
+production-only) and replaces UNIQUE(url)/UNIQUE(hash) with per-environment uniques.
 
-This revision widens the `jobs` schema so that normalized job identity is scoped to
-an environment instead of being global. It deliberately changes no application
-behavior: the currently deployed application keeps working against the migrated
-schema unchanged, which is what lets the migration reach production before the
-application code that depends on it.
-
-What changes:
-
-1. `jobs.environment` is added and every existing row is set to 'production'.
-2. `UNIQUE(url)` and `UNIQUE(hash)` are replaced by `UNIQUE(environment, url)` and
-   `UNIQUE(environment, hash)`.
-
-Backfill basis. This is a stated assumption, not a verified fact: the production
-database is believed to have held production data only, because local development
-has used a separate local database and there is no known reason development or test
-data would have been written to it. No production database was inspected to confirm
-that. Every existing row is therefore backfilled to 'production'.
-
-Why the column carries a server default that the ORM model does not declare.
-The deployed application at the time this revision is applied does not know about
-`jobs.environment`, so its INSERTs omit the column. The database-only
-`DEFAULT 'production'` keeps those INSERTs working during the window between
-applying this migration and deploying the application code that sets the value
-explicitly. The default is intentionally absent from `src/jobintel/models.py`, so
-that `create_all()` in tests produces a column with no default and any code path
-that forgets to supply an environment fails loudly instead of silently being
-labelled 'production'. The production schema is therefore ahead of the ORM model
-for the length of the transition, on purpose. A later contract revision removes the
-server default once the new application code is deployed and verified, which
-restores agreement between the model and the database.
-
-Relaxing uniqueness ahead of the application is safe. `transform_jobs()` in the
-deployed version deduplicates by URL and hash in Python across the whole table, so
-it is strictly stricter than either constraint and cannot produce rows that the
-narrower constraints would have rejected.
-
-Limitation this revision does not address: environment-scoped identity is enforced,
-but there is no database-enforced pointer from a `jobs` row to the `raw_jobs` row it
-was normalized from. A `raw_job_id` foreign key is deferred as a separate decision.
-
-Downgrade is conditional. Restoring global `UNIQUE(url)` and `UNIQUE(hash)` is only
-possible while no URL or hash is present under more than one environment. The
-downgrade checks first and refuses with a clear error rather than failing on a raw
-duplicate key or discarding rows.
-
-No application module is imported here. Migrations must keep behaving the same way
-years from now, which they cannot do if they call into code that is free to change.
+The temporary DEFAULT 'production' kept the previously deployed app's INSERTs working
+until c4e81f6a2b57 removed it. Downgrade refuses if a URL or hash exists in more than
+one environment. No application imports, so the migration never changes behavior.
 """
 
 from collections.abc import Sequence
@@ -72,11 +29,8 @@ depends_on: str | Sequence[str] | None = None
 UQ_ENV_URL = "uq_jobs_environment_url"
 UQ_ENV_HASH = "uq_jobs_environment_hash"
 
-# Names used only inside SQLite batch rebuilds. The real constraints on disk are
-# unnamed (SQLAlchemy emits a bare "UNIQUE (url)"), and SQLite cannot drop an
-# unnamed constraint in place. Batch mode rebuilds the table from the Python
-# definition supplied as copy_from, so naming them there gives drop_constraint
-# something to address without those names ever reaching the database.
+# Names for SQLite batch rebuilds only: the on-disk constraints are unnamed, and
+# batch mode needs a name to drop them.
 _SQLITE_UQ_URL = "uq_jobs_url"
 _SQLITE_UQ_HASH = "uq_jobs_hash"
 
@@ -99,11 +53,7 @@ def _is_nullable(table: str, column: str) -> bool:
 
 
 def _unique_constraint_on(table: str, columns: list[str]) -> str | None:
-    """Return the name of the unique constraint over exactly these columns.
-
-    Returns an empty string when the constraint exists but is unnamed, which is how
-    SQLite reports the inline "UNIQUE (url)" form. Returns None when absent.
-    """
+    """Name of the unique constraint on exactly these columns: '' if unnamed, None if absent."""
     insp = inspect(op.get_bind())
     for uc in insp.get_unique_constraints(table):
         if list(uc["column_names"]) == columns:
@@ -112,13 +62,9 @@ def _unique_constraint_on(table: str, columns: list[str]) -> str | None:
 
 
 def _jobs_table(*, environment: str | None, uniques: str) -> sa.Table:
-    """Standalone definition of jobs, for SQLite batch rebuilds.
+    """jobs as of this revision, for SQLite batch rebuilds (written out, not imported).
 
-    Written out rather than reflected or imported from the ORM so that this
-    revision keeps describing the table as it was when the revision was authored.
-
-    environment: None for absent, "nullable", or "not_null".
-    uniques: "global" for UNIQUE(url)/UNIQUE(hash), "scoped" for the composite pair.
+    environment: None, "nullable" or "not_null". uniques: "global" or "scoped".
     """
     columns: list[sa.Column] = [
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -151,7 +97,7 @@ def _jobs_table(*, environment: str | None, uniques: str) -> sa.Table:
             sa.UniqueConstraint("environment", "hash", name=UQ_ENV_HASH),
         ]
 
-    # Declared so the rebuild recreates them; they are dropped with the old table.
+    # Declared so the rebuild recreates them.
     indexes: list[sa.SchemaItem] = [
         sa.Index("idx_jobs_location", "location"),
         sa.Index("idx_jobs_posted_at", "posted_at"),
@@ -187,7 +133,7 @@ def upgrade() -> None:
             ),
         )
 
-    # Idempotent, and covers a column added by an earlier partial run without a default.
+    # Idempotent; also covers a partial earlier run.
     op.execute(f"UPDATE jobs SET environment = '{ENVIRONMENT_DEFAULT}' WHERE environment IS NULL")
 
     already_scoped = (
@@ -201,8 +147,7 @@ def upgrade() -> None:
         return
 
     if op.get_bind().dialect.name == "sqlite":
-        # SQLite cannot drop an inline UNIQUE or set NOT NULL in place; batch mode
-        # rebuilds the table from the definition below and copies the rows over.
+        # SQLite cannot alter constraints in place; batch mode rebuilds the table.
         with op.batch_alter_table(
             "jobs",
             copy_from=_jobs_table(environment="nullable", uniques="global"),
@@ -227,8 +172,7 @@ def upgrade() -> None:
         nullable=False,
     )
 
-    # The originals are unnamed in the model, so the database picked the name
-    # (jobs_url_key on PostgreSQL). Look it up rather than assume it.
+    # The database named the originals (jobs_url_key on Postgres); look them up.
     for columns in (["url"], ["hash"]):
         name = _unique_constraint_on("jobs", columns)
         if name:
@@ -241,11 +185,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Restore global URL/hash uniqueness and drop jobs.environment.
-
-    Refuses when the data can no longer satisfy the global constraints, which is the
-    case as soon as two environments hold the same URL or hash.
-    """
+    """Restore global uniques and drop jobs.environment; refuse on cross-environment duplicates."""
     if not _has_column("jobs", "environment"):
         return
 
@@ -267,11 +207,7 @@ def downgrade() -> None:
             batch_op.drop_constraint(UQ_ENV_URL, type_="unique")
             batch_op.drop_constraint(UQ_ENV_HASH, type_="unique")
             batch_op.drop_column("environment")
-            # Batch mode needs a name here, so the rebuilt SQLite table ends up with
-            # named constraints where the original had bare "UNIQUE (url)". Same
-            # columns, same enforcement, different DDL text. PostgreSQL, which is
-            # what production runs, takes the unnamed path below and is restored
-            # exactly.
+            # Named here (batch mode requires it); Postgres restores them unnamed below.
             batch_op.create_unique_constraint(_SQLITE_UQ_URL, ["url"])
             batch_op.create_unique_constraint(_SQLITE_UQ_HASH, ["hash"])
         return
@@ -284,7 +220,7 @@ def downgrade() -> None:
 
     op.drop_column("jobs", "environment")
 
-    # Recreated unnamed, letting the database choose the name it used originally.
+    # Unnamed, so the database picks its original name.
     if _unique_constraint_on("jobs", ["url"]) is None:
         op.create_unique_constraint(None, "jobs", ["url"])
     if _unique_constraint_on("jobs", ["hash"]) is None:

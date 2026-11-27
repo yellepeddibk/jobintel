@@ -4,35 +4,12 @@ Revision ID: 2e3a197ea25f
 Revises: c4e81f6a2b57
 Create Date: 2026-11-26 00:00:00.000000
 
-Removes `DEFAULT 'production'` from `raw_jobs.environment` and
-`ingest_runs.environment`.
+Removes DEFAULT 'production' from raw_jobs.environment and ingest_runs.environment
+(left by fbbd657b4749), as c4e81f6a2b57 did for jobs, so a missing environment fails.
 
-Revision fbbd657b4749 added both columns with that database default, to backfill rows
-that predated environment tagging, and never removed it. Revision c4e81f6a2b57
-already removed the same kind of default from `jobs.environment` for the same reason
-this one exists: a default on the column environment isolation rests on means any
-write path that forgets an environment is silently labelled production instead of
-failing, and 'production' is the most damaging value it could choose. Every
-application write path sets `environment` explicitly, and the ORM model drops its
-Python-side `default="production"` in the same change, so after this revision a
-missing environment raises on all three tables.
-
-What this revision must preserve, whatever a given dialect does physically: NOT NULL
-on both columns, every row and every value in it, the `raw_jobs.ingested_at` default,
-and every index on both tables. No stored value changes.
-
-Dialect handling follows c4e81f6a2b57. PostgreSQL, which production runs, drops each
-default in place with `ALTER TABLE ... ALTER COLUMN ... DROP DEFAULT`: metadata only,
-no row rewritten, no index rebuilt. SQLite has no such statement, so each table is
-rebuilt from the explicit definition below, which restates every column and index
-because the rebuild recreates the table from that definition alone.
-
-The downgrade restores both defaults. Both directions skip a table that is already
-in the target state, so either can be re-run.
-
-The tables are written out here rather than imported from `jobintel.models`.
-Migrations have to keep behaving the same way years from now, which they cannot do
-if they read a model that is free to change underneath them.
+Preserves NOT NULL, rows, indexes and the ingested_at default. Postgres drops the
+defaults in place; SQLite rebuilds from the definitions below. Both directions are
+idempotent; downgrade restores the defaults.
 """
 
 from collections.abc import Sequence
@@ -120,8 +97,7 @@ _DEFINITIONS = {"raw_jobs": _raw_jobs_table, "ingest_runs": _ingest_runs_table}
 def _set_default(table: str, *, to_default: str | None) -> None:
     """Add or remove the server default, whichever the dialect requires."""
     if op.get_bind().dialect.name == "sqlite":
-        # recreate="always" is required: the block issues no operations of its own,
-        # and the default "auto" would decide no rebuild was needed and do nothing.
+        # recreate="always": the block has no operations, so "auto" would skip it.
         with op.batch_alter_table(
             table,
             copy_from=_DEFINITIONS[table](with_default=to_default is not None),
