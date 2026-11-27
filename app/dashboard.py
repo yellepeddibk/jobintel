@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy import func, or_, select
 
+from jobintel.analytics.location import is_us_query, us_location_clause
 from jobintel.analytics.queries import (
     authoritative_raw_jobs,
     get_kpis,
@@ -165,39 +166,11 @@ def get_latest_jobs(
                 date_expr = func.coalesce(Job.posted_at, raw.c.ingested_at)
                 q = q.filter(date_expr >= cutoff_date)
 
-            # Filter by location with smart US detection
+            # Filter by location: US/USA/United States selects US locations,
+            # anything else is a substring match.
             if location_filter:
-                filter_lower = location_filter.strip().lower()
-
-                # Smart US detection
-                if filter_lower in ["us", "usa", "united states"]:
-                    # Match common US location patterns
-                    us_patterns = [
-                        Job.location.ilike("%United States%"),
-                        Job.location.ilike("%USA%"),
-                        Job.location.ilike("%US%"),
-                        Job.location.ilike("%, __"),  # State abbreviations: ", CA", ", NY", ", WA"
-                        # Major US cities (tech hubs + common job markets)
-                        Job.location.ilike("%New York%"),
-                        Job.location.ilike("%Los Angeles%"),
-                        Job.location.ilike("%San Francisco%"),
-                        Job.location.ilike("%Bay Area%"),
-                        Job.location.ilike("%Chicago%"),
-                        Job.location.ilike("%Boston%"),
-                        Job.location.ilike("%Seattle%"),
-                        Job.location.ilike("%Austin%"),
-                        Job.location.ilike("%Denver%"),
-                        Job.location.ilike("%Portland%"),
-                        Job.location.ilike("%Miami%"),
-                        Job.location.ilike("%Atlanta%"),
-                        Job.location.ilike("%Dallas%"),
-                        Job.location.ilike("%Houston%"),
-                        Job.location.ilike("%Phoenix%"),
-                        Job.location.ilike("%Philadelphia%"),
-                        Job.location.ilike("%San Diego%"),
-                        Job.location.ilike("%Washington%"),
-                    ]
-                    q = q.filter(or_(*us_patterns))
+                if is_us_query(location_filter):
+                    q = q.filter(us_location_clause(Job.location))
                 else:
                     # Regular substring match for other locations
                     q = q.filter(Job.location.ilike(f"%{location_filter}%"))
@@ -352,7 +325,11 @@ with st.sidebar:
         "Location contains",
         value="",
         key="jobs_location",
-        help="Examples: 'US' (all USA jobs), 'CA' (California), 'Remote', 'New York'",
+        help=(
+            "'US', 'USA' or 'United States' finds US locations, including state codes "
+            "such as 'Austin, TX'. Anything else matches text in the location, e.g. "
+            "'Remote', 'New York', 'Berlin'."
+        ),
     )
 
 
