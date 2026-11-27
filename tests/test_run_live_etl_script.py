@@ -64,3 +64,15 @@ def test_exits_zero_when_every_source_succeeds(monkeypatch, engine, capsys):
     assert code == 0
     assert attempted == ["remotive", "arbeitnow", "remoteok"]
     assert "sources failed" not in capsys.readouterr().out
+
+
+def test_rejects_unsupported_category_option(monkeypatch, capsys):
+    """--category was accepted and silently ignored; now it is refused up front."""
+    monkeypatch.setattr(sys, "argv", [str(SCRIPT), "--category", "devops"])
+    with patch.object(pipeline, "fetch_from_source") as mock_fetch:
+        with pytest.raises(SystemExit) as exit_info:
+            runpy.run_path(str(SCRIPT), run_name="__main__")
+
+    assert exit_info.value.code == 2  # argparse usage error
+    assert "unrecognized arguments: --category devops" in capsys.readouterr().err
+    mock_fetch.assert_not_called()
