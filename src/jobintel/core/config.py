@@ -93,4 +93,38 @@ def redact_db_url(url: str) -> str:
         return "***"
 
 
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def database_host(url: str) -> str:
+    """The host a database URL points at, without credentials. '' for SQLite or unparsable."""
+    try:
+        from sqlalchemy.engine import make_url
+
+        parsed = make_url(url)
+    except Exception:
+        return ""
+    if parsed.drivername.startswith("sqlite"):
+        return ""
+    return parsed.host or ""
+
+
+def is_local_database(url: str) -> bool:
+    """Whether a database URL points at this machine.
+
+    SQLite, a loopback or localhost host, or no host at all (a local socket). An
+    unparsable URL counts as not local, so a warning errs on the side of showing.
+    """
+    try:
+        from sqlalchemy.engine import make_url
+
+        parsed = make_url(url)
+    except Exception:
+        return False
+    if parsed.drivername.startswith("sqlite"):
+        return True
+    host = parsed.host or ""
+    return not host or host in _LOCAL_HOSTS or host.startswith("127.")
+
+
 settings = get_settings()
