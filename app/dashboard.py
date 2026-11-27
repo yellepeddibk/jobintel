@@ -467,15 +467,15 @@ with tab_analytics:
     st.markdown("### Skill Trends Over Time")
 
     # Granularity selector
-    granularity_options = {"Auto": None, "6 hours": "6h", "Daily": "day", "Weekly": "week"}
+    granularity_options = {"Auto": None, "Daily": "day", "Weekly": "week"}
     granularity_label = st.selectbox(
         "Time granularity",
         options=list(granularity_options.keys()),
         index=0,
         help=(
-            "Groups jobs by when they were ingested, not by a refresh schedule. "
-            "Auto uses 6-hour groups for the last 7 days, daily for up to 60 days, "
-            "and weekly for longer ranges and All Time."
+            "Groups jobs by posting date, or by the date they were fetched when the job "
+            "board gives none. Auto uses daily groups for up to 60 days and weekly for "
+            "longer ranges and All Time."
         ),
     )
     granularity = granularity_options[granularity_label]
@@ -519,7 +519,7 @@ with tab_analytics:
                             st.warning(
                                 "⚠️ Only one time bucket found. The chart will show markers only. "
                                 "Trend lines appear once the selected range spans more than one "
-                                "ingestion bucket."
+                                "time bucket."
                             )
 
                         trends_pivot = trends_df.pivot(

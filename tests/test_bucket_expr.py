@@ -119,42 +119,19 @@ class TestBucketExpr:
 class TestGetSkillTrendsGranularity:
     """Test get_skill_trends with different granularities."""
 
-    def test_trends_with_6h_granularity(self, session):
-        """Skill trends should return multiple buckets with 6h granularity."""
-        base_date = datetime(2026, 1, 15)
-        times = [
-            base_date.replace(hour=1),
-            base_date.replace(hour=7),
-            base_date.replace(hour=13),
-            base_date.replace(hour=19),
-        ]
-
-        seed_jobs_with_times(session, times, environment="test")
-        transform_jobs(session, environment="test")
-        extract_skills_for_all_jobs(session, environment="test")
-
-        # Get trends with 6h granularity
-        trends = get_skill_trends(
-            session,
-            skills=["python", "django"],
-            granularity="6h",
-            environment="test",
-        )
-
-        # Should have multiple buckets
-        buckets = {t["bucket"] for t in trends}
-        assert len(buckets) >= 1, "Expected at least 1 bucket in trends"
+    def test_trends_refuse_6h_granularity(self, session):
+        """Trends are charted by date, which has no time of day, so 6h is refused."""
+        with pytest.raises(ValueError, match="granularity"):
+            get_skill_trends(session, skills=["python"], granularity="6h", environment="test")
 
     def test_trends_auto_granularity_short_range(self, session):
-        """Auto granularity should use 6h for ≤7 day range."""
-        base_date = datetime(2026, 1, 15)
-        times = [base_date.replace(hour=1), base_date.replace(hour=13)]
+        """Auto granularity should use daily buckets for a short range."""
+        times = [datetime(2026, 1, 15, 1), datetime(2026, 1, 16, 13)]
 
         seed_jobs_with_times(session, times, environment="test")
         transform_jobs(session, environment="test")
         extract_skills_for_all_jobs(session, environment="test")
 
-        # Request with short date range (auto should pick 6h)
         trends = get_skill_trends(
             session,
             skills=["python"],
@@ -164,13 +141,13 @@ class TestGetSkillTrendsGranularity:
             environment="test",
         )
 
-        # 01:00 and 13:00 fall in different 6-hour buckets.
+        # Posted on two different days: two daily buckets.
         assert len({t["bucket"] for t in trends}) == 2
 
     def test_trends_auto_with_open_end_uses_the_range_to_today(self, session):
         """A "Last 30 days" range has no end date; Auto must still pick daily."""
-        two_days_ago = datetime.combine(date.today() - timedelta(days=2), datetime.min.time())
-        times = [two_days_ago.replace(hour=1), two_days_ago.replace(hour=13)]
+        days = [date.today() - timedelta(days=n) for n in (2, 3)]
+        times = [datetime.combine(d, datetime.min.time()).replace(hour=12) for d in days]
 
         seed_jobs_with_times(session, times, environment="test")
         transform_jobs(session, environment="test")
@@ -184,8 +161,8 @@ class TestGetSkillTrendsGranularity:
             environment="test",
         )
 
-        # Daily, not 6-hour: both jobs share one bucket.
-        assert len({t["bucket"] for t in trends}) == 1
+        # Daily: one bucket per posting day.
+        assert len({t["bucket"] for t in trends}) == 2
 
     def test_trends_returns_empty_for_no_skills(self, session):
         """get_skill_trends should return empty list when no skills provided."""
@@ -194,8 +171,8 @@ class TestGetSkillTrendsGranularity:
 
     def test_trends_all_time_auto_is_weekly(self, session):
         """With no date range ("All Time"), Auto groups weekly."""
-        base_date = datetime(2026, 1, 15)
-        times = [base_date.replace(hour=1), base_date.replace(hour=13)]
+        # Monday and Wednesday of the same week.
+        times = [datetime(2026, 1, 12, 12), datetime(2026, 1, 14, 12)]
 
         seed_jobs_with_times(session, times, environment="test")
         transform_jobs(session, environment="test")
@@ -208,7 +185,7 @@ class TestGetSkillTrendsGranularity:
             environment="test",
         )
 
-        # Weekly, not 6-hour: both jobs share one bucket.
+        # Weekly, not daily: both jobs share one bucket.
         assert len({t["bucket"] for t in trends}) == 1
 
 
@@ -219,14 +196,13 @@ TODAY = date(2026, 11, 26)
     ("date_from", "date_to", "expected"),
     [
         # The dashboard's ranges: a start date and no end date.
-        (TODAY - timedelta(days=7), None, "6h"),
+        (TODAY - timedelta(days=7), None, "day"),
         (TODAY - timedelta(days=30), None, "day"),
         (TODAY - timedelta(days=90), None, "week"),
         # All Time: no range at all.
         (None, None, "week"),
-        # Explicit ranges, at each boundary.
-        (date(2026, 1, 1), date(2026, 1, 8), "6h"),
-        (date(2026, 1, 1), date(2026, 1, 9), "day"),
+        # Explicit ranges, at the 60-day boundary.
+        (date(2026, 1, 1), date(2026, 1, 8), "day"),
         (date(2026, 1, 1), date(2026, 3, 2), "day"),
         (date(2026, 1, 1), date(2026, 3, 3), "week"),
     ],

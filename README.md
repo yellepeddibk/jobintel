@@ -186,7 +186,8 @@ A run is marked `failed` when the source adapter raises. Arbeitnow raises when a
 ### Dashboard
 - Job browser with filtering by keyword, source, skills, location, and date
 - Top skills chart and table with configurable limits
-- Skill trend chart grouped into 6-hour, daily, or weekly buckets by ingestion time. These are chart groupings, not refresh intervals; data changes only when an ingest runs
+- Skill trend chart grouped into daily or weekly buckets by posting date. These are chart groupings, not refresh intervals; data changes only when an ingest runs
+- One date rule across the Analytics tab: a job's posting date, or the date it was fetched when the job board gives none
 - Skills by source comparison chart
 - Ingest run history with failure and warning details
 

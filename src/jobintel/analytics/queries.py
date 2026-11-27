@@ -11,10 +11,10 @@ may now legitimately exist in more than one environment.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Literal
 
-from sqlalchemy import Integer, and_, cast, distinct, func, select, text
+from sqlalchemy import Date, Integer, and_, cast, distinct, func, select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import expression
 
@@ -25,6 +25,11 @@ PRODUCTION_ENV = "production"
 
 # Bucket granularity options
 Bucket = Literal["6h", "day", "week"]
+
+# Skill trends are charted by job_date, a date without a time of day, so 6-hour
+# buckets would be indistinguishable from daily ones and are not offered.
+TrendBucket = Literal["day", "week"]
+TREND_BUCKETS: tuple[TrendBucket, ...] = ("day", "week")
 
 
 def bucket_expr(
@@ -123,6 +128,51 @@ def job_raw_onclause(raw):
     return and_(raw.c.url == Job.url, raw.c.environment == Job.environment)
 
 
+def job_date(raw) -> expression.ColumnElement:
+    """The date analytics filters and charts a job by.
+
+    Its posting date, or the date it was ingested when the source gave none. Every
+    Analytics widget uses this one rule, so a date range means the same thing on all
+    of them, and a job without a posting date is still counted. `raw` is the subquery
+    from `authoritative_raw_jobs()`, joined to the job.
+
+    `date(...)` truncates the ingestion timestamp on both dialects: a function on
+    SQLite, a function-style cast on PostgreSQL.
+    """
+    return func.coalesce(Job.posted_at, func.date(raw.c.ingested_at, type_=Date))
+
+
+def _apply_job_filters(
+    q,
+    source: str | None,
+    date_from: date | None,
+    date_to: date | None,
+    search: str | None,
+):
+    """Source, date-range and search filters shared by the Analytics queries.
+
+    raw_jobs is joined only when a source or date filter needs it: inner for a source
+    filter, which needs a match, and outer for dates alone, so a job with no matchable
+    raw row still counts by its posting date.
+    """
+    if source or date_from or date_to:
+        raw = authoritative_raw_jobs()
+        if source:
+            q = q.join(raw, job_raw_onclause(raw)).filter(raw.c.source == source)
+        else:
+            q = q.outerjoin(raw, job_raw_onclause(raw))
+        if date_from:
+            q = q.filter(job_date(raw) >= date_from)
+        if date_to:
+            q = q.filter(job_date(raw) <= date_to)
+
+    if search:
+        like = f"%{search}%"
+        q = q.filter(Job.title.ilike(like) | Job.company.ilike(like) | Job.location.ilike(like))
+
+    return q
+
+
 def _base_job_query(
     session: Session,
     source: str | None = None,
@@ -135,25 +185,10 @@ def _base_job_query(
 
     The environment gate is `Job.environment` alone, so a job is counted on its own
     recorded provenance and does not depend on a raw row still being matchable by
-    URL. raw_jobs is joined only when a source filter is requested.
+    URL. Dates are filtered by `job_date`.
     """
     q = session.query(Job).filter(Job.environment == environment)
-
-    if source:
-        raw = authoritative_raw_jobs()
-        q = q.join(raw, job_raw_onclause(raw)).filter(raw.c.source == source)
-
-    if date_from:
-        q = q.filter(Job.posted_at >= date_from)
-
-    if date_to:
-        q = q.filter(Job.posted_at <= date_to)
-
-    if search:
-        like = f"%{search}%"
-        q = q.filter(Job.title.ilike(like) | Job.company.ilike(like) | Job.location.ilike(like))
-
-    return q
+    return _apply_job_filters(q, source, date_from, date_to, search)
 
 
 def get_kpis(
@@ -224,20 +259,7 @@ def get_top_skills(
         .join(Job, Job.id == JobSkill.job_id)
         .filter(Job.environment == environment)
     )
-
-    if source:
-        raw = authoritative_raw_jobs()
-        q = q.join(raw, job_raw_onclause(raw)).filter(raw.c.source == source)
-
-    if date_from:
-        q = q.filter(Job.posted_at >= date_from)
-
-    if date_to:
-        q = q.filter(Job.posted_at <= date_to)
-
-    if search:
-        like = f"%{search}%"
-        q = q.filter(Job.title.ilike(like) | Job.company.ilike(like) | Job.location.ilike(like))
+    q = _apply_job_filters(q, source, date_from, date_to, search)
 
     q = (
         q.group_by(JobSkill.skill)
@@ -248,22 +270,18 @@ def get_top_skills(
     return [(skill, int(n)) for skill, n in q.all()]
 
 
-def auto_granularity(date_from: date | None, date_to: date | None, *, today: date) -> Bucket:
+def auto_granularity(date_from: date | None, date_to: date | None, *, today: date) -> TrendBucket:
     """Pick a bucket size for the span being charted.
 
-    Up to 7 days: 6-hour buckets. Up to 60 days: daily. Longer: weekly. A missing end
-    date means the span runs to `today`, which is how the dashboard's "Last N days"
-    ranges arrive. A missing start date means all history, charted weekly to match the
-    weekly ingestion schedule.
+    Up to 60 days: daily. Longer: weekly. A missing end date means the span runs to
+    `today`, which is how the dashboard's "Last N days" ranges arrive. A missing start
+    date means all history, charted weekly. Trends are charted by `job_date`, which
+    has no time of day, so nothing finer than daily is offered.
     """
     if date_from is None:
         return "week"
     days = ((date_to or today) - date_from).days
-    if days <= 7:
-        return "6h"
-    if days <= 60:
-        return "day"
-    return "week"
+    return "day" if days <= 60 else "week"
 
 
 def get_skill_trends(
@@ -272,10 +290,13 @@ def get_skill_trends(
     source: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
-    granularity: Bucket | None = None,
+    granularity: TrendBucket | None = None,
     environment: str = PRODUCTION_ENV,
 ) -> list[dict]:
-    """Get skill counts over time, bucketed by granularity.
+    """Get skill counts over time, bucketed by `job_date`.
+
+    Filtered and grouped by the same `job_date` rule as the other Analytics queries,
+    so a date range selects the same jobs here as in the KPIs and top skills.
 
     Args:
         session: SQLAlchemy session
@@ -283,49 +304,58 @@ def get_skill_trends(
         source: Optional source filter
         date_from: Optional start date (inclusive)
         date_to: Optional end date (inclusive)
-        granularity: '6h', 'day', or 'week'. If None, chosen by `auto_granularity`.
+        granularity: 'day' or 'week'. If None, chosen by `auto_granularity`.
         environment: Environment filter (default: production)
 
     Returns:
         List of dicts: [{"bucket": str, "skill": str, "count": int}, ...]
         Bucket is a timestamp string for charting.
+
+    Raises:
+        ValueError: granularity is not 'day' or 'week'.
     """
     if not skills:
         return []
 
     if granularity is None:
         granularity = auto_granularity(date_from, date_to, today=date.today())
+    if granularity not in TREND_BUCKETS:
+        raise ValueError(
+            f"Trend granularity must be one of {TREND_BUCKETS}, not {granularity!r}: "
+            "trends are charted by date, which has no time of day."
+        )
 
     dialect_name = session.bind.dialect.name if session.bind else "sqlite"
 
-    # ingested_at lives only on the raw row, so this query keeps a raw join, matched
-    # on environment as well as URL. The join is inner by necessity: a job with no
-    # resolvable raw row has no ingestion time and cannot be placed in a bucket.
-    # Resolving through the authoritative subquery also puts each job in exactly one
-    # bucket rather than one per raw version.
+    # The raw join supplies the ingestion date job_date falls back to. Resolving
+    # through the authoritative subquery puts each job in exactly one bucket rather
+    # than one per raw version. Outer, so a job with no matchable raw row is still
+    # charted by its posting date; inner when filtering by source, which needs one.
     raw = authoritative_raw_jobs()
-    bucket_col = bucket_expr(raw.c.ingested_at, granularity, dialect_name)
+    day = job_date(raw)
+    bucket_col = bucket_expr(day, granularity, dialect_name)
     count_col = func.count(distinct(JobSkill.job_id)).label("count")
 
     q = (
         session.query(bucket_col, JobSkill.skill, count_col)
         .join(Job, Job.id == JobSkill.job_id)
-        .join(raw, job_raw_onclause(raw))
         .filter(Job.environment == environment)
         .filter(JobSkill.skill.in_(skills))
     )
 
     if source:
-        q = q.filter(raw.c.source == source)
+        q = q.join(raw, job_raw_onclause(raw)).filter(raw.c.source == source)
+    else:
+        q = q.outerjoin(raw, job_raw_onclause(raw))
 
-    # Use proper datetime comparison for index efficiency
     if date_from:
-        start_dt = datetime.combine(date_from, datetime.min.time())
-        q = q.filter(raw.c.ingested_at >= start_dt)
+        q = q.filter(day >= date_from)
 
     if date_to:
-        end_dt = datetime.combine(date_to, datetime.max.time())
-        q = q.filter(raw.c.ingested_at <= end_dt)
+        q = q.filter(day <= date_to)
+
+    # A job with neither a posting date nor a raw row cannot be placed in a bucket.
+    q = q.filter(day.isnot(None))
 
     # Group by bucket and skill
     q = q.group_by(bucket_col, JobSkill.skill).order_by(bucket_col)
