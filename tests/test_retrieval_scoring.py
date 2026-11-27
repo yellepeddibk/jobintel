@@ -1,8 +1,4 @@
-"""Pure scoring tests. No database, no clock, no Streamlit.
-
-The point of a deterministic retrieval layer is that its ranking can be reasoned
-about in isolation, so these tests never construct a session. Every date is injected.
-"""
+"""Pure scoring tests: no database, and every date is injected."""
 
 from __future__ import annotations
 

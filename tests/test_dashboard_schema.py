@@ -1,8 +1,4 @@
-"""The production dashboard must not change the database structure.
-
-Renders app/dashboard.py in-process with Streamlit's AppTest against the in-memory
-SQLite database conftest configures. No network and no external database.
-"""
+"""The production dashboard never changes the database structure (AppTest, offline)."""
 
 from pathlib import Path
 

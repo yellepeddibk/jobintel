@@ -1,7 +1,4 @@
-"""The dashboard's US location filter, run as real SQL.
-
-Uses the shared session fixture, so it runs on SQLite and, in CI, on PostgreSQL.
-"""
+"""The US location filter, run as real SQL."""
 
 import pytest
 from sqlalchemy import select
@@ -40,8 +37,7 @@ NOT_US_LOCATIONS = [
     "Mauritius",
     "Busan",
     "Remote - Brussels",
-    # End in ", " plus two letters that are not a state code: the old "%, __" rule
-    # matched these.
+    # ", XX" endings that are not state codes.
     "London, UK",
     "Toronto, ON",
     "Vancouver, BC",

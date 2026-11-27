@@ -1,8 +1,4 @@
-"""The public production dashboard must not render exception details.
-
-Renders app/dashboard.py in-process with Streamlit's AppTest. Failures are injected by
-patching what the script imports, so no network and no external database are used.
-"""
+"""The production dashboard never renders exception details (AppTest, offline)."""
 
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,8 +21,7 @@ MARKER = "db-host-do-not-show.internal:5432"
 
 
 def _render(monkeypatch: pytest.MonkeyPatch, env: str) -> AppTest:
-    # The dashboard reads the settings singleton and re-imports its dependencies on
-    # every run, so patches applied before run() are what the script sees.
+    # The script re-reads settings and imports on every run, so patches apply.
     monkeypatch.setattr(settings, "ENV", env)
     return AppTest.from_file(str(DASHBOARD), default_timeout=60).run()
 
@@ -97,11 +92,7 @@ def test_development_shows_connection_failure_details(monkeypatch):
 
 @pytest.fixture
 def failed_run_db(tmp_path, monkeypatch):
-    """A file-backed database holding one failed run per environment.
-
-    File-backed rather than in-memory because AppTest runs the script on another
-    thread, and each thread gets its own in-memory SQLite database.
-    """
+    """One failed run per environment, file-backed so AppTest's thread sees it."""
     engine = create_engine(f"sqlite+pysqlite:///{(tmp_path / 'runs.db').as_posix()}")
     Base.metadata.create_all(bind=engine)
     session_factory = sessionmaker(bind=engine)

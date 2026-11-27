@@ -15,8 +15,7 @@ from jobintel.models import Base, IngestRun
 
 DASHBOARD = Path(__file__).resolve().parents[1] / "app" / "dashboard.py"
 
-# Display-only URLs: the engine is already bound elsewhere, so these are never used to
-# connect. They decide what the header says and prove the password is never shown.
+# Display-only URLs, never connected to.
 LOCAL_URL = "postgresql+psycopg://jobintel:s3cret-pw@127.0.0.1:5433/jobintel"
 REMOTE_URL = "postgresql+psycopg://jobintel:s3cret-pw@db.remote.invalid:5432/jobintel"
 

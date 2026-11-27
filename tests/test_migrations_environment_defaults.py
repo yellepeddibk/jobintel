@@ -1,9 +1,4 @@
-"""Revision 2e3a197ea25f removes DEFAULT 'production' from raw_jobs and ingest_runs.
-
-Each test builds a database at the previous head with migrations, seeds it, and then
-moves it with Alembic. Runs on SQLite, and on PostgreSQL too when TEST_POSTGRES_URL is
-set (see the make_database and empty_db fixtures in conftest.py).
-"""
+"""Revision 2e3a197ea25f removes DEFAULT 'production' from raw_jobs and ingest_runs."""
 
 from __future__ import annotations
 
